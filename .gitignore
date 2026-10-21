@@ -1,0 +1,24 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local runtimes and generated data
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.log
+data/
+reports/
+work/
+
+# Machine-specific hosting and editors
+.openai/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
