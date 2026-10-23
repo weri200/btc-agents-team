@@ -11,7 +11,7 @@ $('#menu-toggle').onclick=()=>{
 const esc=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const time=v=>new Date(v).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false})+' KST';
 let report=demo(),horizon='intraday',history=[],toastTimer;
-try{const saved=JSON.parse(localStorage.getItem('futures-desk-v1')||'[]');if(Array.isArray(saved))history=saved.slice(0,20).map(validate)}catch{history=[]}
+try{const saved=JSON.parse(localStorage.getItem('futures-desk-v1')||'[]');if(Array.isArray(saved))history=saved.slice(0,20).filter(r=>{try{validate(r);return true}catch{return false}})}catch{history=[]}// Drop only invalid entries; clearing all would erase them on the next save.
 function toast(msg){$('#toast').textContent=msg;$('#toast').style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').style.display='none',5000)}
 function saveHistory(){try{localStorage.setItem('futures-desk-v1',JSON.stringify(history));return true}catch{toast('브라우저 저장 공간 부족: 이번 보고서는 현재 화면에서만 볼 수 있습니다.');return false}}
 function page(name){document.querySelectorAll('.page').forEach(p=>p.hidden=p.id!==name);document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.page===name));$('#page-name').textContent={desk:'분석 데스크',history:'판단 이력',system:'연결 및 구성'}[name];if(name==='history')renderHistory();if(name==='system')loadRoles()}

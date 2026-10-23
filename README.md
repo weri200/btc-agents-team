@@ -57,7 +57,7 @@ python server.py
 node test.cjs
 node test_market_ui.cjs
 node test_opinions.cjs
-python -m unittest -v test_market.py test_local_llm.py test_indicators.py
+python -m unittest -v
 node --check dist/app.js
 node --check dist/model.js
 node --check dist/market.js

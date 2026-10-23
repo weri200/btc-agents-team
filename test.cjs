@@ -23,11 +23,12 @@ for(const saved of [null,'dark','light','invalid']){
 assert.doesNotThrow(()=>vm.runInNewContext(themeSource,{matchMedia:()=>({matches:false,addEventListener(){}}),localStorage:{getItem(){throw Error('blocked')}},document:{documentElement:{dataset:{}},getElementById:()=>null,addEventListener(){}}}));
 console.log('Passed: theme preference, system default, toggle, persistence, and unavailable storage.');
 const element=()=>({children:[],style:{setProperty(k,v){this[k]=v}},append(...nodes){this.children.push(...nodes)},replaceChildren(...nodes){this.children=nodes}});
-const chartNodes={'market-chart':element(),'chart-symbol':{value:'BTCUSDT'},'chart-interval':{value:'15'},'chart-link':{},'chart-retry':{},'chart-studies':Object.assign(element(),{closest:()=>({addEventListener(){}})}),'chart-study-count':{},'chart-studies-reset':{}};
+const chartNodes={'market-chart':element(),'chart-symbol':{value:'BTCUSDT'},'chart-interval':{value:'15'},'chart-link':{},'chart-retry':{},'chart-studies':Object.assign(element(),{closest:()=>menu}),'chart-study-count':{},'chart-studies-reset':{}};
+let closeMenu,outsideClick;const menu={open:true,contains:n=>n==='inside',classList:{toggle(){}},getBoundingClientRect:()=>({right:500}),addEventListener(_,fn){closeMenu=fn}};
 const chartStore={'futures-desk-studies':JSON.stringify(['STD;RSI','bogus'])};
 let themeChanged;
 const chartRoot={dataset:{theme:'dark'}};
-vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'dist/chart.js'),'utf8'),{localStorage:{getItem:k=>chartStore[k]??null,setItem:(k,v)=>{chartStore[k]=v}},document:{getElementById:id=>chartNodes[id],createElement:element,documentElement:chartRoot,createTextNode:t=>({textContent:t})},MutationObserver:class{constructor(fn){themeChanged=fn}observe(){}}});
+vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'dist/chart.js'),'utf8'),{localStorage:{getItem:k=>chartStore[k]??null,setItem:(k,v)=>{chartStore[k]=v}},document:{getElementById:id=>chartNodes[id],createElement:element,documentElement:chartRoot,addEventListener(_,fn){outsideClick=fn},createTextNode:t=>({textContent:t})},MutationObserver:class{constructor(fn){themeChanged=fn}observe(){}}});
 const chartConfig=()=>JSON.parse(chartNodes['market-chart'].children[0].children[2].textContent);
 assert.equal(chartConfig().symbol,'BINANCE:BTCUSDT.P');
 chartNodes['chart-symbol'].value='ETHUSDT';chartNodes['chart-symbol'].onchange();assert.equal(chartConfig().symbol,'BINANCE:ETHUSDT.P');
@@ -39,7 +40,12 @@ chartNodes['chart-retry'].onclick();assert.equal(chartNodes['market-chart'].chil
 assert.deepEqual(chartConfig().studies,['STD;RSI']);assert.equal(chartConfig().hide_top_toolbar,false);
 assert.equal(chartNodes['chart-study-count'].textContent,'지표 1');
 const macd=chartNodes['chart-studies'].children.find(l=>l.children[0].value==='STD;MACD').children[0];
-macd.checked=true;macd.onchange();
+const beforeClose=chartNodes['market-chart'].children[0];macd.checked=true;macd.onchange();
+// The chart is rebuilt only when the menu closes, never per checkbox.
+assert.equal(chartNodes['market-chart'].children[0],beforeClose);
+outsideClick({target:'inside'});assert.equal(menu.open,true);
+outsideClick({target:'outside'});assert.equal(menu.open,false);closeMenu();
 assert.deepEqual(chartConfig().studies,['STD;RSI','STD;MACD']);assert.equal(chartNodes['market-chart'].style['--study-panes'],2);assert.equal(chartStore['futures-desk-studies'],'["STD;RSI","STD;MACD"]');
-chartNodes['chart-studies-reset'].onclick();assert.deepEqual(chartConfig().studies,[]);assert.equal(chartNodes['chart-study-count'].textContent,'지표');
+const afterMacd=chartNodes['market-chart'].children[0];closeMenu();assert.equal(chartNodes['market-chart'].children[0],afterMacd);
+chartNodes['chart-studies-reset'].onclick();closeMenu();assert.deepEqual(chartConfig().studies,[]);assert.equal(chartNodes['chart-study-count'].textContent,'지표');
 console.log('Passed: chart symbol, interval, theme sync, error fallback, and retry.');
