@@ -1,6 +1,7 @@
 """Local GUI + public market data API. Run: python server.py"""
 import argparse
 import json
+import os
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -11,6 +12,11 @@ import local_llm
 DIST = Path(__file__).resolve().parent / 'dist'
 ASSETS = { '/' + p.name for p in DIST.iterdir() if p.is_file() and p.suffix in ('.html', '.js', '.css') }
 collector = Collector()
+
+
+class Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second server bind the same port silently; fail instead.
+    allow_reuse_address = os.name != 'nt'
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -38,6 +44,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json_response(200, local_llm.status())
             except local_llm.AnalysisError as exc:
                 return self.json_response(503, {'error': str(exc)})
+        if parsed.path == '/api/progress':
+            return self.json_response(200, local_llm.progress.snapshot())
+        if parsed.path == '/api/last-report':
+            report = local_llm.progress.last_report
+            return self.json_response(200, report) if report else self.json_response(404, {'error': '아직 완료된 분석이 없습니다.'})
         if parsed.path == '/api/market':
             origin = self.headers.get('Origin')
             if origin and origin not in {'http://' + host for host in hosts}:
@@ -76,17 +87,27 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError, TypeError):
             return self.json_response(400, {'error': '지원 종목 하나를 지정하세요.'})
         if not local_llm.lock.acquire(blocking=False):
-            return self.json_response(409, {'error': '이미 분석 중입니다. 완료 후 다시 시도하세요.'})
+            return self.json_response(409, {'error': '이미 다른 창에서 분석 중입니다. 진행 상황을 표시합니다.'})
         try:
+            config = local_llm.load_config()
+            local_llm.progress.begin(payload['symbol'], config['roles'])
             state = local_llm.status()
             if not state['ready']:
                 missing = ', '.join(f"{r['name']}({r['model']})" for r in state['roles'] if not r['available'])
                 raise local_llm.AnalysisError(f'LM Studio에서 찾을 수 없는 모델: {missing}. 모델을 설치하거나 models.json을 수정하세요.')
             snapshot = {**collector.collect(payload['symbol']), 'derivatives': collector.derivatives(payload['symbol'])}
-            result = local_llm.analyze(snapshot)
+            result = local_llm.analyze(snapshot, config)
+            local_llm.progress.finish(report=result)
             return self.json_response(200, result)
         except (local_llm.AnalysisError, MarketError) as exc:
+            local_llm.progress.finish(error=str(exc))
             return self.json_response(502, {'error': str(exc)})
+        except Exception as exc:
+            # Still answer the page and end the progress other windows are watching.
+            self.log_error('analysis failed: %r', exc)
+            message = '분석이 예기치 않게 중단되었습니다. 서버 창의 오류를 확인하세요.'
+            local_llm.progress.finish(error=message)
+            return self.json_response(500, {'error': message})
         finally:
             local_llm.lock.release()
 
@@ -101,7 +122,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8876)
     args = parser.parse_args()
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
+    try:
+        server = Server(('127.0.0.1', args.port), Handler)
+    except OSError:
+        raise SystemExit(f'포트 {args.port}을 이미 다른 프로그램이 쓰고 있습니다. 실행 중인 서버 창을 닫거나 --port로 다른 포트를 지정하세요.')
     print(f'Futures Desk: http://127.0.0.1:{args.port}', flush=True)
     try:
         server.serve_forever()

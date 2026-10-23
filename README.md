@@ -49,7 +49,7 @@ cd btc-agents-team
 python server.py
 ```
 
-브라우저에서 `http://127.0.0.1:8876`을 엽니다. 포트를 바꾸려면 `python server.py --port 8877`을 사용하세요. 기존 정적 서버가 같은 포트를 사용 중이면 먼저 종료해야 합니다. 단순 정적 서버나 파일 직접 열기로는 수집 API가 동작하지 않습니다. 보고서 이력과 테마 설정은 주소·포트별 브라우저 저장소에 보관됩니다.
+브라우저에서 `http://127.0.0.1:8876`을 엽니다. 포트를 바꾸려면 `python server.py --port 8877`을 사용하세요. 같은 포트를 이미 다른 서버가 쓰고 있으면 서버가 오류 메시지를 내고 종료합니다. Windows에서 두 서버가 같은 포트에 겹쳐 뜨는 것을 막기 위해서입니다. 단순 정적 서버나 파일 직접 열기로는 수집 API가 동작하지 않습니다. 보고서 이력과 테마 설정은 주소·포트별 브라우저 저장소에 보관됩니다.
 
 검사에는 Node.js가 필요합니다. 별도 npm 의존성은 없습니다.
 
@@ -211,5 +211,7 @@ TradingView 공식 Advanced Chart 위젯으로 Binance USDT 무기한 BTC·ETH·
 - 이 PC(RX 9070 XT 16GB)에서 BTC·ETH 실제 분석은 모델 교체를 포함해 약 3~5분 걸렸습니다. 서버당 한 번에 하나의 분석만 실행합니다.
 - 실패·시간 초과·잘린 응답·형식 오류는 실패한 역할과 모델 ID를 표시하고 기존 보고서를 덮어쓰지 않습니다.
 - 보고서에는 역할별 모델 ID(`team`), 계산된 지표(`facts`), 팀원별 검증 결과(`verification`)가 포함되어 JSON으로 내보낼 수 있습니다.
-- API: `GET /api/llm` 역할별 모델 상태, `POST /api/analyze` JSON `{"symbol":"BTCUSDT"}`. 구현: `local_llm.py`, `indicators.py`.
+- 진행 상황: 분석 중에는 역할별 카드의 테두리와 모델 로고 둘레가 12시 방향부터 시계방향으로 차오릅니다. 진행도는 그 모델의 직전 소요 시간(`data/llm_timings.json`, 처음에는 60초)을 기준으로 한 **추정치**이고, 서버가 완료를 알리기 전까지 95%에서 멈춥니다. 완료는 초록, 실패는 빨강입니다. 로고는 공급사를 구분하기 위한 단순화한 표시이며 공식 로고 파일이 아닙니다.
+- 진행 상황은 서버가 기록하므로 다른 브라우저 창에서도 보입니다. 다른 창에서 시작한 분석이 끝나면 **결과 불러오기**로 그 보고서를 가져올 수 있습니다. 서버를 다시 시작하면 마지막 보고서는 사라집니다.
+- API: `GET /api/llm` 역할별 모델 상태, `POST /api/analyze` JSON `{"symbol":"BTCUSDT"}`, `GET /api/progress` 진행 상황, `GET /api/last-report` 마지막 완료 보고서. 구현: `local_llm.py`, `indicators.py`.
 - 모델 API 참고: https://lmstudio.ai/docs/developer/openai-compat/structured-output

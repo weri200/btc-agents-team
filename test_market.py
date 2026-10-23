@@ -250,6 +250,21 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(self.post()[0], 502)
         self.assertFalse(server.local_llm.lock.locked())
 
+    def test_progress_and_last_report_endpoints(self):
+        progress = server.local_llm.Progress(Path(tempfile.mkdtemp()) / 'timings.json')
+        with patch.object(server.local_llm, 'progress', progress):
+            self.assertEqual(json.loads(self.get('/api/progress')[1]), {'state': 'idle'})
+            self.assertEqual(self.get('/api/last-report')[0], 404)
+            with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}),                     patch.object(server.collector, 'collect', return_value={}),                     patch.object(server.collector, 'derivatives', return_value={}),                     patch.object(server.local_llm, 'analyze', return_value={'id': 'done-report'}):
+                self.assertEqual(self.post()[0], 200)
+            state = json.loads(self.get('/api/progress')[1])
+            self.assertEqual((state['state'], state['reportId']), ('done', 'done-report'))
+            self.assertEqual(json.loads(self.get('/api/last-report')[1])['id'], 'done-report')
+            with patch.object(server.local_llm, 'status', side_effect=RuntimeError('boom')):
+                self.assertEqual(self.post()[0], 500)
+            self.assertEqual(json.loads(self.get('/api/progress')[1])['state'], 'failed')
+            self.assertFalse(server.local_llm.lock.locked())
+
 
 if __name__ == '__main__':
     unittest.main()

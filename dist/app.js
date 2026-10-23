@@ -47,19 +47,72 @@ $('#clear-history').onclick=()=>{if(!history.length){toast('지울 이력이 없
 $('#integrations').innerHTML=[['Binance API','공개 시세·펀딩비·미결제약정·마감 캔들 수집'],['LM Studio','역할별 로컬 모델 분석 · 인용 수치 검증'],['OpenBB','거시·뉴스 등 배경 자료 수집'],['CCXT','Binance 선물 시세·펀딩·수급 자료 수집'],['TradingAgents','팀원별 분석과 찬반 검토, 종합 보고서 생성'],['NautilusTrader','백테스트와 비용·체결 가정 검증']].map(([n,d])=>`<div class="integration"><b>${n}</b><p>${d}</p><span class="tag neutral">${['Binance API','LM Studio'].includes(n)?'구현됨':'미연결'}</span></div>`).join('');
 render();
 
+// Simplified provider marks for the progress cards; not official logo files.
+const marks={
+ microsoft:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9.5" height="9.5" fill="#f25022"/><rect x="12.5" y="2" width="9.5" height="9.5" fill="#7fba00"/><rect x="2" y="12.5" width="9.5" height="9.5" fill="#00a4ef"/><rect x="12.5" y="12.5" width="9.5" height="9.5" fill="#ffb900"/></svg>',
+ mistral:'<svg viewBox="0 0 25 25" aria-hidden="true">'+[['#ffd800',[0,4]],['#ffaf00',[0,1,3,4]],['#ff8205',[0,1,2,3,4]],['#fa500f',[0,2,4]],['#e10500',[0,4]]].map(([c,cols],row)=>cols.map(x=>`<rect x="${x*5}" y="${row*5}" width="5" height="5" fill="${c}"/>`).join('')).join('')+'</svg>',
+ gemma:'<svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="gemma-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4285f4"/><stop offset="1" stop-color="#9b72cb"/></linearGradient></defs><path d="M12 1C12 7 17 12 23 12C17 12 12 17 12 23C12 17 7 12 1 12C7 12 12 7 12 1Z" fill="url(#gemma-g)"/></svg>',
+ qwen:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7z" fill="none" stroke="#615ced" stroke-width="2.2"/><path d="M12 7.5a4.5 4.5 0 1 0 2.9 7.95L17 17.5" fill="none" stroke="#615ced" stroke-width="2.2" stroke-linecap="round"/></svg>'
+};
+function markFor(model){const m=String(model).toLowerCase();const key=m.includes('mistral')?'mistral':m.includes('phi')||m.includes('microsoft')?'microsoft':m.includes('gemma')||m.includes('google')?'gemma':m.includes('qwen')?'qwen':null;return key?marks[key]:`<span class="initials">${esc(m.split('/').pop().slice(0,2).toUpperCase())}</span>`}
+const seconds=ms=>Math.max(0,Math.round(ms/1000))+'초';
+let progress=null,progressAt=0,progressTimer=null,tickTimer=null,ownRun=false;
+function roleProgress(r){
+ if(r.status==='done'||r.status==='failed')return 1;
+ if(r.status!=='running')return 0;
+ // Estimated from this model's last duration; held below full until the server reports done.
+ return Math.min(.95,(r.elapsedMs+Date.now()-progressAt)/Math.max(r.expectedMs,1000));
+}
+function roleText(r){
+ if(r.status==='done')return '완료 · '+seconds(r.durationMs);
+ if(r.status==='failed')return '실패 · '+seconds(r.durationMs||0);
+ if(r.status==='running')return `분석 중 · ${seconds(r.elapsedMs+Date.now()-progressAt)} / 예상 ${seconds(r.expectedMs)}`;
+ return '대기';
+}
+function renderProgress(){
+ const box=$('#team-progress');if(!progress||!Array.isArray(progress.roles)){box.hidden=true;return}
+ box.hidden=false;
+ box.innerHTML=progress.roles.map(r=>`<div class="role-card ${esc(r.status)}" style="--p:${roleProgress(r).toFixed(3)}" role="group" aria-label="${esc(r.name)} ${esc(roleText(r))}"><div class="role-inner"><div class="role-ring"><div class="role-logo">${markFor(r.model)}</div></div><div class="role-text"><b>${esc(r.name)}</b><span title="${esc(r.model)}">${esc(r.model)}</span><em>${esc(roleText(r))}</em></div></div></div>`).join('');
+ const elapsed=seconds((progress.elapsedMs||0)+(progress.state==='running'?Date.now()-progressAt:0));
+ if(progress.state==='running')$('#llm-status').textContent=`${progress.symbol} · ${progress.stage==='collecting'?'시장·수급 데이터 수집 중':'역할별 모델 분석 중'} · 경과 ${elapsed}${ownRun?'':' · 다른 창에서 시작한 분석입니다.'}`;
+ else if(!ownRun&&progress.state==='done'&&progress.reportId&&progress.reportId!==report.id)$('#llm-status').innerHTML=`${esc(progress.symbol)} · 다른 창에서 분석이 끝났습니다 · ${esc(elapsed)} <button class="btn" id="llm-load" type="button">결과 불러오기</button>`;
+ else if(!ownRun&&progress.state==='failed')$('#llm-status').textContent=`${progress.symbol} · 다른 창의 분석 실패: ${progress.error||''}`;
+}
+function tick(){clearTimeout(tickTimer);if(progress&&progress.state==='running'){renderProgress();tickTimer=setTimeout(tick,250)}}
+async function pollProgress(){
+ clearTimeout(progressTimer);
+ try{
+  const response=await fetch('/api/progress',{cache:'no-store'});const data=await response.json();
+  if(!data||!['idle','running','done','failed'].includes(data.state))return;
+  progress=data.state==='idle'?null:data;progressAt=Date.now();renderProgress();tick();
+  if(data.state==='running')progressTimer=setTimeout(pollProgress,1000);
+ }catch{progressTimer=setTimeout(pollProgress,3000)}
+}
+document.addEventListener('click',async e=>{
+ if(!e.target.closest||!e.target.closest('#llm-load'))return;
+ try{
+  const response=await fetch('/api/last-report',{cache:'no-store'});const data=await response.json();if(!response.ok)throw new Error(data.error||'결과를 불러오지 못했습니다.');
+  const next=validate(data);report=next;history=[next,...history.filter(x=>x.id!==next.id)].slice(0,20);saveHistory();render();
+  $('#llm-status').textContent=next.symbol+' · 다른 창의 분석 결과를 불러왔습니다 · 기준 '+time(next.asOf);
+ }catch(err){$('#llm-status').textContent='결과 불러오기 실패: '+err.message}
+});
 $('#analyze').onclick=async()=>{
  const button=$('#analyze');if(button.disabled)return;
- const symbol=$('#chart-symbol').value;button.disabled=true;button.textContent='분석 중…';
+ const symbol=$('#chart-symbol').value;button.disabled=true;button.textContent='분석 중…';ownRun=true;
  $('#llm-status').textContent=symbol+' · 시장 데이터를 수집하고 역할별 로컬 모델로 차례로 분석합니다. 모델을 바꿔 불러오므로 수 분 걸릴 수 있습니다.';
+ setTimeout(pollProgress,300);
  try{
   const response=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol})});
-  const data=await response.json();if(!response.ok)throw new Error(data.error||'분석 요청 실패');
+  const data=await response.json();
+  if(response.status===409){ownRun=false;$('#llm-status').textContent=data.error;pollProgress();return}
+  if(!response.ok)throw new Error(data.error||'분석 요청 실패');
   const next=validate(data);if(next.symbol!==symbol||next.mode!=='analysis')throw new Error('분석 응답 종목 또는 유형이 다릅니다.');
   report=next;history=[next,...history.filter(x=>x.id!==next.id)].slice(0,20);saveHistory();render();
   $('#llm-status').textContent=symbol+' · 로컬 분석 완료 · 기준 '+time(next.asOf)+' · 보고서는 자동 갱신되지 않습니다.';
  }catch(e){$('#llm-status').textContent='분석 실패: '+e.message+' 기존 보고서를 유지했습니다.';}
- finally{button.disabled=false;button.textContent='로컬 모델팀으로 분석';}
+ finally{button.disabled=false;button.textContent='로컬 모델팀으로 분석';if(ownRun)await pollProgress();ownRun=false}
 };
+if(typeof fetch==='function')pollProgress();
 async function loadRoles(){
  const list=$('#llm-roles');list.innerHTML='<p class="footnote">LM Studio 모델 상태를 확인하는 중입니다.</p>';
  try{
