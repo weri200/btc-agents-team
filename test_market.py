@@ -35,6 +35,20 @@ def response(path, **params):
                 'lastFundingRate': '-0.0001', 'nextFundingTime': NOW + 100000, 'time': NOW}
     if path.endswith('/openInterest'):
         return {'symbol': symbol, 'openInterest': '1000', 'time': NOW}
+    if path.endswith('/fundingRate'):
+        return [{'symbol': symbol, 'fundingTime': NOW - (3 - i) * 28800000, 'fundingRate': f'{(-1) ** i * 0.0001:.4f}', 'markPrice': '100'}
+                for i in range(3)]
+    if path.startswith('/futures/data/'):
+        step = market.HISTORY_PERIODS[params['period']]
+        start = NOW // step * step - 25 * step
+        history = []
+        for i in range(25):
+            row = {'symbol': symbol, 'timestamp': start + i * step, 'sumOpenInterest': str(1000 + i), 'sumOpenInterestValue': str(100000 + i),
+                   'longShortRatio': '1.5', 'longAccount': '0.6', 'shortAccount': '0.4', 'buySellRatio': '1.1', 'buyVol': '11', 'sellVol': '10'}
+            if 'taker' in path:
+                del row['symbol']
+            history.append(row)
+        return history
     return rows(params['interval'])
 
 
@@ -132,6 +146,38 @@ class MarketTests(unittest.TestCase):
             with self.assertRaises(market.MarketError):
                 self.collector.request('/fapi/v1/time')
 
+    def test_derivatives_history(self):
+        with patch.object(self.collector, 'request', side_effect=response) as request:
+            history = self.collector.derivatives('BTCUSDT')
+        self.assertEqual(request.call_count, 2 + 4 * len(market.HISTORY_PERIODS))
+        self.assertEqual(len(history['funding']), 3)
+        self.assertEqual(set(history['periods']['4h']), set(market.HISTORY_ENDPOINTS))
+        self.assertEqual(history['warnings'], [])
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM derivatives').fetchone()[0], 3 + 25 * 8)
+
+    def test_derivatives_rejects_bad_history(self):
+        for mutate in (lambda rows: rows.reverse(), lambda rows: rows[0].__setitem__('sumOpenInterest', '-1'),
+                       lambda rows: rows[0].__setitem__('symbol', 'ETHUSDT'), lambda rows: rows.clear()):
+            def bad(path, **params):
+                data = response(path, **params)
+                if path.endswith('openInterestHist'):
+                    mutate(data)
+                return data
+            with self.subTest(mutate=mutate), patch.object(self.collector, 'request', side_effect=bad),                     self.assertRaises(market.MarketError):
+                self.collector.derivatives('BTCUSDT')
+
+    def test_stale_derivatives_flagged(self):
+        def stale(path, **params):
+            data = response(path, **params)
+            if path.endswith('takerlongshortRatio') and params['period'] == '1h':
+                for row in data:
+                    row['timestamp'] -= 10 * 3600000
+            return data
+        with patch.object(self.collector, 'request', side_effect=stale):
+            history = self.collector.derivatives('BTCUSDT')
+        self.assertTrue(any('1h taker' in w for w in history['warnings']))
+
     def test_storage_failure_is_not_success(self):
         with patch.object(self.collector, 'request', side_effect=response), patch('market.save_snapshot', side_effect=sqlite3.OperationalError('full')):
             with self.assertRaises(market.MarketError):
@@ -194,7 +240,9 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(self.post()[0], 409)
 
     def test_local_analysis_success_and_failure(self):
-        with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}), patch.object(server.collector, 'collect', return_value={}), patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}):
+        with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}), patch.object(server.collector, 'collect', return_value={}), \
+                patch.object(server.collector, 'derivatives', return_value={}), \
+                patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}):
             status, body = self.post()
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(body)['id'], 'test')

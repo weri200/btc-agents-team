@@ -26,29 +26,34 @@ class FakeLMStudio:
     """Answers each role from the facts it was sent; `wrong` roles cite a bad value."""
     def __init__(self, verdicts=None, judge='long', wrong=()):
         self.verdicts = verdicts or {'technical': 'long', 'derivatives': 'long', 'critic': 'wait'}
-        self.judge, self.wrong, self.calls = judge, set(wrong), []
+        self.judge, self.wrong, self.calls, self.payloads = judge, set(wrong), [], []
 
     def __call__(self, path, payload=None):
         role = payload['response_format']['json_schema']['name']
+        self.payloads.append(payload)
         self.calls.append((role, payload['model'], json.loads(payload['messages'][1]['content'])))
         sent = self.calls[-1][2]
         if role == 'judge':
-            body = {h: {'verdict': self.judge, 'summary': '요약', 'agreement': '공통', 'disagreement': '이견', 'condition': '조건'}
+            body = {h: {'verdict': self.judge, 'summary': '종합 요약 문장입니다.', 'agreement': '공통 의견 문장입니다.',
+                        'disagreement': '남은 이견 문장입니다.', 'condition': '재검토 조건 문장입니다.'}
                     for h in llm.HORIZONS}
         else:
             body = {}
             for h in llm.HORIZONS:
-                key = f"{llm.HORIZONS[h][2][0]}.rsi14"
+                key = f"{llm.HORIZONS[h][2][0]}.{'change1Pct' if role == 'derivatives' else 'rsi14'}"
                 value = sent['facts'][h][key] + (30 if role in self.wrong else 0.004)
                 body[h] = {'verdict': self.verdicts[role], 'summary': 'RSI14 기준 과열 구간입니다.',
                            'evidence': [{'claim': '모멘텀이 강합니다.', 'ref': key, 'value': value}],
-                           'counter': '반락 가능성', 'invalidation': '추세 이탈'}
+                           'counter': '반락할 가능성이 있습니다.', 'invalidation': '추세선을 이탈하면 철회합니다.'}
         return {'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(body, ensure_ascii=False)}}]}
 
 
 class LocalTeamTests(unittest.TestCase):
     def setUp(self):
         self.snapshot = make_snapshot()
+        patcher = patch.object(llm, 'RETRY_DELAY', 0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_team(self, fake):
         with patch.object(llm, 'request', side_effect=fake):
@@ -60,6 +65,7 @@ class LocalTeamTests(unittest.TestCase):
         self.assertEqual([(r, m) for r, m, _ in fake.calls],
                          [('technical', 'model-a'), ('derivatives', 'model-b'), ('critic', 'model-c'), ('judge', 'model-d')])
         self.assertIn('team', fake.calls[2][2])
+        self.assertTrue(all(p['reasoning_effort'] == 'none' for p in fake.payloads))
         self.assertNotIn('facts', fake.calls[3][2])
         for h in report['horizons'].values():
             self.assertEqual([a['id'] for a in h['agents']], ['technical', 'derivatives', 'macro', 'critic'])
@@ -70,12 +76,37 @@ class LocalTeamTests(unittest.TestCase):
         self.assertEqual(report['promptVersion'], llm.PROMPT_VERSION)
         self.assertIn('시각 주의', report['warnings'])
 
-    def test_horizon_facts_are_scoped(self):
+    def test_horizon_and_role_facts_are_scoped(self):
+        self.snapshot['derivatives'] = {'funding': [{'time': 0, 'fundingRate': '0.0001'}], 'warnings': ['이력 주의'],
+                                        'periods': {p: {'openInterest': [{'time': 0, 'sumOpenInterest': '5', 'sumOpenInterestValue': '9'}],
+                                                        'globalLongShort': [{'time': 0, 'longShortRatio': '1.2'}],
+                                                        'topLongShort': [{'time': 0, 'longShortRatio': '1.1'}],
+                                                        'taker': [{'time': 0, 'buySellRatio': '0.9'}]} for p in ('1h', '4h')}}
         fake = FakeLMStudio()
-        self.run_team(fake)
-        facts = fake.calls[0][2]['facts']
-        self.assertTrue(all(k.split('.')[0] in ('market', '5m', '15m', '1h') for k in facts['intraday']))
-        self.assertTrue(all(k.split('.')[0] in ('market', '4h', '1d') for k in facts['swing']))
+        report = self.run_team(fake)
+        sent = {role: payload['facts'] for role, _, payload in fake.calls if role != 'judge'}
+        self.assertTrue(all(k.split('.')[0] in ('market', '5m', '15m', '1h') for k in sent['technical']['intraday']))
+        self.assertTrue(all(k.split('.')[0] in ('market', '4h', '1d') for k in sent['technical']['swing']))
+        self.assertNotIn('1h.longShortRatio', sent['technical']['intraday'])
+        self.assertIn('1h.rsi14', sent['technical']['intraday'])
+        self.assertIn('1h.longShortRatio', sent['derivatives']['intraday'])
+        self.assertIn('4h.oiValueUsd', sent['derivatives']['swing'])
+        self.assertNotIn('1h.rsi14', sent['derivatives']['intraday'])
+        self.assertIn('1h.rsi14', sent['critic']['intraday'])
+        self.assertIn('1h.takerBuySellRatio', sent['critic']['intraday'])
+        self.assertIn('이력 주의', report['warnings'])
+
+    def test_retries_once_then_fails(self):
+        with patch.object(llm, 'request', side_effect=[llm.AnalysisError('busy'), FakeLMStudio()('/chat/completions', {
+                'model': 'model-a', 'messages': [{}, {'content': json.dumps({'facts': {h: {f"{llm.HORIZONS[h][2][0]}.rsi14": 1}
+                                                                                   for h in llm.HORIZONS}})}],
+                'response_format': {'json_schema': {'name': 'technical'}}})]) as call:
+            schema = llm.analyst_schema({h: [f"{llm.HORIZONS[h][2][0]}.rsi14"] for h in llm.HORIZONS})
+            llm.chat('technical', 'model-a', {}, schema, 0.1)
+        self.assertEqual(call.call_count, 2)
+        with patch.object(llm, 'request', side_effect=llm.AnalysisError('down')) as call, self.assertRaises(llm.AnalysisError):
+            llm.chat('technical', 'model-a', {}, schema, 0.1)
+        self.assertEqual(call.call_count, 2)
 
     def test_wrong_citation_forces_wait(self):
         report = self.run_team(FakeLMStudio(wrong={'technical'}))

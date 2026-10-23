@@ -82,7 +82,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not state['ready']:
                 missing = ', '.join(f"{r['name']}({r['model']})" for r in state['roles'] if not r['available'])
                 raise local_llm.AnalysisError(f'LM Studio에서 찾을 수 없는 모델: {missing}. 모델을 설치하거나 models.json을 수정하세요.')
-            result = local_llm.analyze(collector.collect(payload['symbol']))
+            snapshot = {**collector.collect(payload['symbol']), 'derivatives': collector.derivatives(payload['symbol'])}
+            result = local_llm.analyze(snapshot)
             return self.json_response(200, result)
         except (local_llm.AnalysisError, MarketError) as exc:
             return self.json_response(502, {'error': str(exc)})
