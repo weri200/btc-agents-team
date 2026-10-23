@@ -81,12 +81,9 @@ h3{margin:0;font-size:18px;font-weight:600}
 .agent p{color:var(--copy);font-size:12px;line-height:1.8;margin:14px 0 20px;flex:1}
 .agent-footer{border-top:1px solid var(--line);padding-top:11px;display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:12px;color:var(--muted)}
 .agent-footer span{overflow-wrap:anywhere}
-.bottom-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--gap);margin-top:var(--gap)}
+.bottom-grid{display:grid;grid-template-columns:1fr;gap:var(--gap);margin-top:var(--gap)}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
 .panel-title{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:20px}
-.synthesis-item{display:grid;grid-template-columns:72px minmax(0,1fr);gap:12px;margin-top:14px;font-size:12px}
-.synthesis-item>span{color:var(--accent);font-size:12px}
-.synthesis-item p{margin:0;color:var(--copy);line-height:1.85}
 .checks{padding:0;margin:0;list-style:none}
 .checks li{display:flex;gap:14px;margin-top:15px}
 .checks li>span{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:50%;width:24px;height:24px;text-align:center;line-height:22px;flex-shrink:0}
@@ -185,7 +182,7 @@ header { background: var(--panel); }
 .text-btn:hover, .source-link:hover { text-decoration: underline; }
 .btn, .nav, .icon-btn, .segmented button { min-height: 44px; }
 .icon-btn { min-width: 44px; }
-.agent p, .horizon-card p, .synthesis-item, .detail-copy, .detail-list { font-size: 14px; }
+.agent p, .horizon-card p, .detail-copy, .detail-list { font-size: 14px; }
 h1 { line-height: 1.3; }
 .subtitle { font-size: 14px; }
 .agent h3 { font-size: 16px; }
@@ -310,3 +307,12 @@ body.sidebar-collapsed main { margin-left:0; }
 #llm-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
 #llm-load { padding:7px 12px; }
 @media(max-width:430px) { .team-progress { grid-template-columns:1fr; } }
+
+/* Judge synthesis: first card of the team grid, full width, four rows laid out in two columns. */
+.judge-card { grid-column:1 / -1; border-color:color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.judge-card .agent-icon { color:var(--accent); }
+.agent .judge-explanation { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:calc(var(--gap) * 2); row-gap:9px; }
+.agent .judge-explanation p { margin:0; }
+@media(max-width:600px) { .agent .judge-explanation { grid-template-columns:1fr; } }
+/* With the team synthesis moved into the judge card, the checklist spans the width with its items side by side. */
+@media(min-width:801px) { .checks { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--gap); } .checks li { margin-top:0; } }

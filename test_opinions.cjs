@@ -2,6 +2,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const model=require('./dist/model.js');
+const esc=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const nodes=new Map();
 function node(selector){
  if(!nodes.has(selector))nodes.set(selector,{innerHTML:'',textContent:'',value:'BTCUSDT',options:[{value:'BTCUSDT'}],addEventListener(name,fn){this[name]=fn},add(option){this.options.push(option)},setAttribute(name,value){this[name]=value}});
@@ -13,7 +14,11 @@ for(const horizon of ['intraday','swing']){
  vm.runInContext(`horizon='${horizon}';render()`,context);
  const html=node('#agents').innerHTML;
  assert.equal((html.match(/class="agent-explanation"/g)||[]).length,4);
- assert.equal((html.match(/<p><span>/g)||[]).length,12);
+ assert.equal((html.match(/class="agent-explanation judge-explanation"/g)||[]).length,1);
+ assert.equal((html.match(/<p><span>/g)||[]).length,16);
+ assert(html.startsWith('<article class="agent judge-card">'));
+ assert(html.includes(esc(model.demo().horizons[horizon].summary)));
+ assert.match(html,/데모 · 모델 미실행 · 롱 \d · 숏 \d · 관망 \d/);
  assert(html.includes(model.demo().horizons[horizon].agents[0].invalidation));
 }
 node('#chart-symbol').value='ETHUSDT';node('#chart-symbol').change();
