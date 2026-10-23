@@ -24,6 +24,7 @@ function render(){
  opinionContext();
  const isDemo=report.mode==='demo';$('#notice-title').textContent=isDemo?'아직 AI 분석 결과가 없습니다.':(report.origin==='local-llm'?'로컬 모델팀 분석 — 인용 수치는 서버 지표와 대조했지만 해석의 정확성은 검증되지 않았습니다.':'가져온 분석 보고서 — 내용의 정확성은 검증되지 않았습니다.');
  $('#notice-text').textContent=isDemo?' 서버를 켠 뒤 처음 열면 실제 수집값으로 로컬 분석을 자동으로 시작하고, 그 뒤에는 서버의 마지막 분석 결과를 불러옵니다.':(report.origin==='local-llm'?' 역할마다 지정한 로컬 모델이 판단하며, 인용 수치가 틀린 의견은 관망으로 바꿨습니다. '+(Array.isArray(report.warnings)?report.warnings.join(' '):''):' 실시간 연결이 아닌 파일의 결과입니다. 데이터 기준 시각과 각 출처를 확인하세요.');
+ $('#export').disabled=isDemo;  // Nothing real to save before the first result.
  $('#source-badge').textContent=isDemo?'분석 전':(report.origin==='local-llm'?'로컬 모델팀':'가져온 보고서');$('#report-time').textContent=isDemo?'':'보고서 기준 · '+time(report.asOf);
  if(!Array.from($('#symbol').options).some(o=>o.value===report.symbol))$('#symbol').add(new Option(report.symbol,report.symbol));$('#symbol').value=report.symbol;
  $('.coin').textContent=report.symbol.startsWith('BTC')?'₿':report.symbol.startsWith('ETH')?'Ξ':'◈';
@@ -51,7 +52,6 @@ function download(r){const url=URL.createObjectURL(new Blob([JSON.stringify(r,nu
 function renderHistory(){$('#history-list').innerHTML=history.length?history.map((r,i)=>`<article class="history-entry"><div><b>${esc(r.symbol)}</b> <span class="tag neutral">${r.mode==='demo'?'가져온 예시':(r.origin==='local-llm'?'로컬 분석':'가져온 분석')}</span><p>${esc(time(r.asOf))} · 단타 ${labels[r.horizons.intraday.verdict]} / 스윙 ${labels[r.horizons.swing.verdict]}</p></div><button class="btn" data-history="${i}">보고서 열기 ↗</button></article>`).join(''):'<div class="empty"><b>아직 가져온 보고서가 없습니다.</b>분석 데스크에서 JSON 보고서를 가져오면 이곳에 기록됩니다.<br>예시 화면을 보는 것만으로 실제 분석 이력이 만들어지지는 않습니다.</div>'}
 document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>page(b.dataset.page));
 document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.select||b.dataset.horizon){horizon=b.dataset.select||b.dataset.horizon;render();if(b.dataset.select)$('#agents').scrollIntoView({block:'start'})}if(b.dataset.agent!==undefined)detail(Number(b.dataset.agent));if(b.dataset.history!==undefined){report=history[Number(b.dataset.history)];render();page('desk')}});
-$('#symbol').onchange=()=>{report=demo($('#symbol').value);render();toast('보고서의 데모 종목을 변경했습니다. 실제 수집 종목은 차트에서 선택하세요.')};
 $('#close-detail').onclick=()=>$('#detail').close();$('#detail').onclick=e=>{if(e.target===$('#detail')){const r=$('#detail').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('#detail').close()}};
 $('#export').onclick=()=>download(report);$('#sample').onclick=()=>download(demo());$('#import').onclick=()=>$('#file').click();
 $('#file').onchange=async()=>{const f=$('#file').files[0];if(!f)return;try{if(f.size>500000)throw new Error('500KB 이하의 보고서만 가져올 수 있습니다.');const r=validate(JSON.parse(await f.text()));const next=[r,...history.filter(x=>x.id!==r.id)].slice(0,20);report=r;history=next;const stored=saveHistory();render();page('desk');if(stored)toast('보고서를 가져왔습니다. 출처와 기준 시각을 확인하세요.')}catch(e){toast('가져오기 실패: '+e.message)}finally{$('#file').value=''}};
@@ -114,12 +114,13 @@ async function pollProgress(){
   if(data.state==='running')progressTimer=setTimeout(pollProgress,1000);
  }catch{progressTimer=setTimeout(pollProgress,3000)}
 }
-async function loadLast(message){
+// quiet: leave the status line alone and ignore "no report yet", so a running or failed run stays visible.
+async function loadLast(message,quiet){
  try{
   const response=await fetch('/api/last-report',{cache:'no-store'});const data=await response.json();if(!response.ok)throw new Error(data.error||'결과를 불러오지 못했습니다.');
   const next=validate(data);report=next;history=[next,...history.filter(x=>x.id!==next.id)].slice(0,20);saveHistory();render();
-  $('#llm-status').textContent=next.symbol+' · '+message+' · 기준 '+time(next.asOf);
- }catch(err){$('#llm-status').textContent='결과 불러오기 실패: '+err.message}
+  if(!quiet)$('#llm-status').textContent=next.symbol+' · '+message+' · 기준 '+time(next.asOf);
+ }catch(err){if(!quiet)$('#llm-status').textContent='결과 불러오기 실패: '+err.message}
 }
 document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('#llm-load'))loadLast('다른 창의 분석 결과를 불러왔습니다')});
 $('#analyze').onclick=async()=>{
@@ -138,12 +139,12 @@ $('#analyze').onclick=async()=>{
  }catch(e){$('#llm-status').textContent='분석 실패: '+e.message+' 기존 보고서를 유지했습니다.';}
  finally{button.disabled=false;button.textContent='로컬 모델팀으로 분석';if(ownRun)await pollProgress();ownRun=false}
 };
-// Auto-run only on the first visit after the server starts (progress still idle); later visits load the server's
-// last result, and a run already going in another window just shows its progress.
+// Auto-run only on the first visit after the server starts (progress still idle). Later visits load the server's
+// last good report, which it keeps even while a newer run is going or after one failed.
 async function start(){
  await pollProgress();
  if(!progress)return $('#analyze').onclick();
- if(progress.state==='done'&&progress.reportId)return loadLast('서버의 마지막 분석 결과를 불러왔습니다');
+ return loadLast('서버의 마지막 분석 결과를 불러왔습니다',progress.state!=='done');
 }
 if(typeof fetch==='function')start();
 async function loadRoles(){
