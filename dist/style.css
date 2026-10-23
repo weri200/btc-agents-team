@@ -314,6 +314,7 @@ body.sidebar-collapsed main { margin-left:0; }
 @media(max-width:430px) { .team-progress { grid-template-columns:1fr; } }
 
 /* Judge synthesis: first card of the team grid, full width, four rows laid out in two columns. */
+.agents-empty,.horizons-empty { grid-column:1 / -1; }
 .judge-card { grid-column:1 / -1; border-color:color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .judge-card .agent-icon { color:var(--accent); }
 .agent .judge-explanation { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:calc(var(--gap) * 2); row-gap:9px; }
