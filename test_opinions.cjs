@@ -45,7 +45,7 @@ console.log('Passed: sidebar collapse and expansion with accessible state.');
  context.fetch=async()=>({ok:true,json:async()=>generated});
  await node('#analyze').onclick();
  assert.match(node('#llm-status').textContent,/분석 완료/);
- assert.match(node('#notice-title').textContent,/로컬 Qwen/);
+ assert.match(node('#notice-title').textContent,/로컬 모델팀/);
  assert.match(node('#notice-text').textContent,/시각 주의/);
  const previous=vm.runInContext('report',context);
  context.fetch=async()=>({ok:false,json:async()=>({error:'offline'})});

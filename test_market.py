@@ -194,7 +194,7 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(self.post()[0], 409)
 
     def test_local_analysis_success_and_failure(self):
-        with patch.object(server.local_llm, 'status', return_value={'available': True}), patch.object(server.collector, 'collect', return_value={}), patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}):
+        with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}), patch.object(server.collector, 'collect', return_value={}), patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}):
             status, body = self.post()
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(body)['id'], 'test')

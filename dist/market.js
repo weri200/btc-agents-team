@@ -34,7 +34,10 @@
       put('market-times', `KST · 거래소 기준 ${time(data.serverTime)} · 체결가 ${time(data.ticker.time)} · 마크/펀딩 ${time(data.mark.time)} · 미결제약정 ${time(data.openInterest.time)} · 다음 펀딩 ${time(data.mark.nextFundingTime)}`);
       const rows = Object.entries(data.candleSummary).map(([interval, bar]) => {
         const tr = document.createElement('tr');
-        for (const value of [interval, bar.count, time(bar.lastCloseTime), format(bar.lastClose)]) {
+        const ind = data.indicators?.intervals?.[interval] || {};
+        const pct = value => value === undefined ? '—' : `${value > 0 ? '+' : ''}${value}%`;
+        for (const value of [interval, bar.count, time(bar.lastCloseTime), format(bar.lastClose),
+          ind.rsi14 ?? '—', pct(ind.closeVsSma20Pct), ind.atr14Pct === undefined ? '—' : `${ind.atr14Pct}%`]) {
           const td = document.createElement('td'); td.textContent = value; tr.append(td);
         }
         return tr;

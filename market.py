@@ -11,6 +11,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+import indicators
+
 BASE = 'https://fapi.binance.com'
 SYMBOLS = ('BTCUSDT', 'ETHUSDT', 'SOLUSDT')
 INTERVALS = {'5m': 300000, '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000}
@@ -180,6 +182,7 @@ class Collector:
                     'endpoints': ['/fapi/v1/time', '/fapi/v2/ticker/price', '/fapi/v1/premiumIndex',
                                   '/fapi/v1/openInterest', '/fapi/v1/klines'],
                 }
+                result['indicators'] = indicators.compute(result)
                 save_snapshot(result, self.db_path)
             except (KeyError, TypeError, IndexError) as exc:
                 raise MarketError('거래소 응답 필드가 누락되거나 형식이 변경되었습니다.') from exc

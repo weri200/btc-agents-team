@@ -78,8 +78,10 @@ class Handler(SimpleHTTPRequestHandler):
         if not local_llm.lock.acquire(blocking=False):
             return self.json_response(409, {'error': '이미 분석 중입니다. 완료 후 다시 시도하세요.'})
         try:
-            if not local_llm.status()['available']:
-                raise local_llm.AnalysisError('설치된 Qwen 모델을 LM Studio에서 로드하세요.')
+            state = local_llm.status()
+            if not state['ready']:
+                missing = ', '.join(f"{r['name']}({r['model']})" for r in state['roles'] if not r['available'])
+                raise local_llm.AnalysisError(f'LM Studio에서 찾을 수 없는 모델: {missing}. 모델을 설치하거나 models.json을 수정하세요.')
             result = local_llm.analyze(collector.collect(payload['symbol']))
             return self.json_response(200, result)
         except (local_llm.AnalysisError, MarketError) as exc:
