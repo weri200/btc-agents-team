@@ -15,12 +15,15 @@
   // Oscillators open their own pane under the price; the chart grows so the price pane keeps its height.
   const PANE_STUDIES = new Set(['STD;RSI', 'STD;MACD', 'STD;Stochastic_RSI', 'STD;Average_True_Range']);
   const KEY = 'futures-desk-studies';
-  const DEFAULT = [];
-  let selected, renderedTheme;
+  let selected, renderedTheme, renderedStudies;
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
-    selected = Array.isArray(saved) ? saved.filter(id => STUDIES.some(([s]) => s === id)) : DEFAULT;
-  } catch { selected = DEFAULT; }
+    selected = Array.isArray(saved) ? saved.filter(id => STUDIES.some(([s]) => s === id)) : [];
+  } catch { selected = []; }
+
+  function showCount() {
+    studyCount.textContent = selected.length ? `지표 ${selected.length}` : '지표';
+  }
 
   function renderStudies() {
     studyBox.replaceChildren(...STUDIES.map(([id, name]) => {
@@ -32,24 +35,22 @@
       input.onchange = () => {
         selected = STUDIES.map(([s]) => s).filter(s => s === id ? input.checked : selected.includes(s));
         try { localStorage.setItem(KEY, JSON.stringify(selected)); } catch {}
-        studyCount.textContent = selected.length ? `지표 ${selected.length}` : '지표';
-        renderChart();
+        showCount();
       };
       label.append(input, document.createTextNode(name));
       return label;
     }));
-    studyCount.textContent = selected.length ? `지표 ${selected.length}` : '지표';
+    showCount();
   }
 
   function renderChart() {
     renderedTheme = document.documentElement.dataset.theme;
+    renderedStudies = selected.join();
     host.style.setProperty('--study-panes', selected.filter(id => PANE_STUDIES.has(id)).length);
     const ticker = `BINANCE:${symbol.value}.P`;
     const container = document.createElement('div');
     container.className = 'tradingview-widget-container';
     const widget = document.createElement('div');
-    // The widget sizes its iframe from this element; without an explicit height the chart
-    // canvas and the iframe disagree, which cut off the price and time axes.
     widget.className = 'tradingview-widget-container__widget';
     const credit = document.createElement('div');
     credit.className = 'tradingview-widget-copyright';
@@ -81,17 +82,19 @@
   // Open the menu toward whichever side has room, since the button moves as the controls wrap.
   const menuHost = studyBox.closest('details');
   menuHost.addEventListener('toggle', () => {
-    if (!menuHost.open) return;
+    // Rebuild once on close: rebuilding per checkbox removed the iframe mid-load, the same fault as the theme bug.
+    if (!menuHost.open) return selected.join() !== renderedStudies && renderChart();
     // Prefer ending at the button's right edge (stays over the chart); flip only when that runs off the left.
     menuHost.classList.toggle('align-left', menuHost.getBoundingClientRect().right - 260 < 16);
   });
+  // A click outside closes the menu, so a change applies without reopening it.
+  document.addEventListener('click', e => { if (menuHost.open && !menuHost.contains(e.target)) menuHost.open = false; });
   symbol.onchange = interval.onchange = renderChart;
   document.getElementById('chart-retry').onclick = renderChart;
   document.getElementById('chart-studies-reset').onclick = () => {
     selected = [];
     try { localStorage.setItem(KEY, '[]'); } catch {}
     renderStudies();
-    renderChart();
   };
   // theme.js re-applies the same theme on DOMContentLoaded; rebuilding then removed the first iframe mid-load,
   // leaving TradingView bound to a dead frame and the chart mis-sized. Rebuild only on a real change.

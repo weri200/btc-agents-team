@@ -237,9 +237,11 @@ html[data-theme="dark"] {
 .chart-controls label { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
 .chart-controls select { min-height:44px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); padding:8px; }
 .market-chart { height:calc(480px + var(--study-panes, 0) * 120px); }
+/* TradingView's embed sizes its iframe from these two elements; both need explicit heights. */
 .tradingview-widget-container { height:100%; width:100%; }
 .tradingview-widget-container__widget { height:calc(100% - 32px); width:100%; }
-.tradingview-widget-copyright { font-size:12px; padding-top:6px; text-align:center; color:var(--accent); }
+.tradingview-widget-copyright { height:32px; line-height:32px; text-align:center; font-size:12px; }
+.tradingview-widget-copyright a { color:var(--muted); text-decoration:none; }
 .chart-panel .footnote { margin-top:12px; }
 .chart-panel .footnote a { color:var(--accent); }
 @media(max-width:600px) { .chart-panel { padding:14px; } .market-chart { height:calc(390px + var(--study-panes, 0) * 100px); } }
@@ -316,11 +318,6 @@ body.sidebar-collapsed main { margin-left:0; }
 @media(max-width:600px) { .agent .judge-explanation { grid-template-columns:1fr; } }
 /* With the team synthesis moved into the judge card, the checklist spans the width with its items side by side. */
 @media(min-width:801px) { .checks { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--gap); } .checks li { margin-top:0; } }
-/* TradingView's embed sizes its iframe from these two elements; both need explicit heights. */
-.market-chart .tradingview-widget-container { height:100%; width:100%; }
-.market-chart .tradingview-widget-container__widget { height:calc(100% - 32px); width:100%; }
-.market-chart .tradingview-widget-copyright { height:32px; line-height:32px; text-align:center; font-size:12px; }
-.market-chart .tradingview-widget-copyright a { color:var(--muted); text-decoration:none; }
 .chart-studies { position:relative; }
 .chart-studies summary { list-style:none; min-height:44px; display:flex; align-items:center; cursor:pointer; }
 .chart-studies summary::-webkit-details-marker { display:none; }

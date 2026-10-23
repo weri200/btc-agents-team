@@ -83,4 +83,12 @@ console.log('Passed: sidebar collapse and expansion with accessible state.');
  assert.equal(vm.runInContext('report',context),before);
  assert.equal(node('#analyze').disabled,false);
  console.log('Passed: progress rings per role, other-window run, result loading offer, and 409 handling.');
+ // Runs last: re-running app.js rebinds handlers on the shared fake nodes.
+ {
+  const stored=JSON.stringify([model.demo('BTCUSDT'),{schemaVersion:2},model.demo('ETHUSDT')]);
+  const other=vm.createContext({...context,localStorage:{getItem:()=>stored}});
+  vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'dist/app.js'),'utf8'),other);
+  assert.equal(vm.runInContext('history.map(r=>r.symbol).join()',other),'BTCUSDT,ETHUSDT');
+  console.log('Passed: one invalid saved report does not erase the rest of the history.');
+ }
 })().catch(e=>{console.error(e);process.exit(1)});
