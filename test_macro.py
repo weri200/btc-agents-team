@@ -91,6 +91,12 @@ class FetchTests(unittest.TestCase):
             self.assertEqual(macro.fetch('BTCUSDT', AS_OF)['warnings'], raw()['warnings'])
         self.assertEqual(run.call_args.args[0][-2:], ['BTCUSDT', str(AS_OF)])
 
+    def test_failure_message_keeps_last_error_line(self):
+        failed = subprocess.CompletedProcess([], 1, b'', b'Traceback ...\nModuleNotFoundError: No module named openbb\n')
+        with patch.object(macro, 'python_path', return_value=Path(__file__)), patch.object(macro.subprocess, 'run', return_value=failed):
+            with self.assertRaisesRegex(macro.MacroUnavailable, r'오류로 끝났습니다\. \(ModuleNotFoundError: No module named openbb\)$'):
+                macro.fetch('BTCUSDT', AS_OF)
+
     def test_failures_become_unavailable(self):
         cases = [subprocess.CompletedProcess([], 1, b''), subprocess.CompletedProcess([], 0, b'not json'),
                  subprocess.TimeoutExpired('x', 1)]

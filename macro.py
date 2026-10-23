@@ -47,7 +47,9 @@ def fetch(symbol, as_of_ms):
     lines = completed.stdout.decode('utf-8', 'replace').strip().splitlines()
     # OpenBB may print build messages first; the bridge's JSON is always the last line.
     if completed.returncode != 0 or not lines:
-        raise MacroUnavailable('OpenBB 수집 프로세스가 오류로 끝났습니다.')
+        # The last stderr line is usually the exception, e.g. "ModuleNotFoundError: ...".
+        errors = (completed.stderr or b'').decode('utf-8', 'replace').strip().splitlines()
+        raise MacroUnavailable('OpenBB 수집 프로세스가 오류로 끝났습니다.' + (f' ({errors[-1][:200]})' if errors else ''))
     try:
         return json.loads(lines[-1])
     except ValueError as exc:

@@ -305,6 +305,9 @@ body.sidebar-collapsed main { margin-left:0; }
 .role-card.running .role-text em { color:var(--accent); }
 .role-card.done .role-text em { color:var(--green); }
 .role-card.failed .role-text em { color:var(--red); }
+/* Why a seat failed, was skipped, or was turned to wait; two lines, full text on hover. */
+.role-text small { font-size:11px; line-height:1.4; color:var(--muted); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.role-card.failed .role-text small { color:var(--red); }
 .role-card.pending { opacity:.75; }
 #llm-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
 #llm-load { padding:7px 12px; }

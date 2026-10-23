@@ -53,7 +53,7 @@ class Progress:
                                                     'expectedMs': expected.get(m, DEFAULT_EXPECTED_MS)}
                                                    for r, m in roles.items()]}
 
-    def role(self, role, status):
+    def role(self, role, status, reason=None):
         with self.guard:
             if self.state.get('state') != 'running':
                 return
@@ -62,6 +62,8 @@ class Progress:
                 if item['role'] != role:
                     continue
                 item['status'] = status
+                if reason:
+                    item['reason'] = reason
                 if status == 'running':
                     item['started'] = time.monotonic()
                 elif 'started' in item:
@@ -88,6 +90,10 @@ class Progress:
                 if error and item['status'] == 'running':
                     item['status'] = 'failed'
                     item['durationMs'] = round((time.monotonic() - item['started']) * 1000)
+                    # The card already shows the name and model, so drop the "이름(모델)" prefix chat() adds.
+                    item['reason'] = error.removeprefix(f"{item['name']}({item['model']})").lstrip(': ') or error
+                elif error and item['status'] == 'pending':
+                    item['reason'] = '앞 단계에서 분석이 중단되어 실행하지 않았습니다.'
             if report:
                 self.last_report = report
                 self.state['reportId'] = report['id']
@@ -345,7 +351,7 @@ def chat(role, model, payload, schema, temperature):
     except AnalysisError as exc:
         raise AnalysisError(str(exc) if label in str(exc) else f'{label}: {exc}') from exc
     except (KeyError, IndexError, TypeError, ValueError) as exc:
-        raise AnalysisError(f'{label}이 유효한 JSON 보고서를 반환하지 않았습니다.') from exc
+        raise AnalysisError(f'{label}: 유효한 JSON 보고서를 반환하지 않았습니다.') from exc
 
 
 def evidence_text(item, check):
@@ -389,8 +395,9 @@ def analyze(snapshot, config=None):
                    'signals': {h: indicators.describe(facts, keys[role][h]) for h in HORIZONS}, **(extra or {})}
         progress.role(role, 'running')
         outputs[role] = chat(role, roles[role], payload, analyst_schema(keys[role], news_ids), config['temperature'])
-        progress.role(role, 'done')
         checks[role] = {h: verify(outputs[role][h], facts) for h in HORIZONS}
+        mismatched = [HORIZONS[h][0] for h in HORIZONS if checks[role][h]['failed']]
+        progress.role(role, 'done', f"{'·'.join(mismatched)} 인용 수치가 서버 계산값과 달라 관망으로 바꿨습니다." if mismatched else None)
 
     def effective(role, h):
         return 'wait' if checks[role][h]['failed'] else outputs[role][h]['verdict']
@@ -409,7 +416,7 @@ def analyze(snapshot, config=None):
             news_ids=list(news))
         analysts.append('macro')
     elif 'macro' in roles:
-        progress.role('macro', 'skipped')
+        progress.role('macro', 'skipped', macro.get('error') or 'OpenBB 자료가 없습니다.')
     run('critic', {'team': team_view(analysts)})
     judge_input = {'symbol': snapshot['symbol'], 'asOf': stamp, 'warnings': list(warnings),
                    'team': team_view([*analysts, 'critic'])}
