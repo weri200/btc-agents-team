@@ -95,6 +95,46 @@ def save_snapshot(snapshot, path=DB):
                            [(snapshot['symbol'], interval, bar['openTime'], json.dumps(bar)) for bar in bars])
 
 
+# Positioning history for the derivatives analyst: 1h feeds intraday, 4h feeds swing.
+HISTORY_PERIODS = {'1h': 3600000, '4h': 14400000}
+HISTORY_COUNT = 25
+FUNDING_COUNT = 21
+HISTORY_ENDPOINTS = {
+    'openInterest': ('/futures/data/openInterestHist', ('sumOpenInterest', 'sumOpenInterestValue')),
+    'globalLongShort': ('/futures/data/globalLongShortAccountRatio', ('longShortRatio', 'longAccount', 'shortAccount')),
+    'topLongShort': ('/futures/data/topLongShortPositionRatio', ('longShortRatio', 'longAccount', 'shortAccount')),
+    'taker': ('/futures/data/takerlongshortRatio', ('buySellRatio', 'buyVol', 'sellVol')),
+}
+
+
+def history_rows(rows, symbol, fields, time_key='timestamp', signed=()):
+    if not isinstance(rows, list) or not rows or len(rows) > 1000:
+        raise MarketError('수급 이력 응답 개수 오류')
+    result, previous = [], None
+    for row in rows:
+        if not isinstance(row, dict) or row.get('symbol', symbol) != symbol:
+            raise MarketError('수급 이력 응답 종목 또는 형식 오류')
+        stamp = timestamp(row[time_key])
+        if previous is not None and stamp <= previous:
+            raise MarketError('수급 이력 시각 순서 오류')
+        previous = stamp
+        for field in fields:
+            number(row[field], signed=field in signed)
+        result.append({'time': stamp, **{field: row[field] for field in fields}})
+    return result
+
+
+def save_derivatives(symbol, history, path=DB):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute('CREATE TABLE IF NOT EXISTS derivatives (symbol TEXT, metric TEXT, period TEXT, time INTEGER, payload TEXT, PRIMARY KEY(symbol,metric,period,time))')
+        rows = [(symbol, 'funding', '8h', r['time'], json.dumps(r)) for r in history['funding']]
+        for period, metrics in history['periods'].items():
+            rows += [(symbol, metric, period, r['time'], json.dumps(r)) for metric, data in metrics.items() for r in data]
+        db.executemany('INSERT OR REPLACE INTO derivatives VALUES (?,?,?,?,?)', rows)
+
+
 class Collector:
     def __init__(self, db_path=DB):
         self.db_path = db_path
@@ -190,3 +230,34 @@ class Collector:
                 raise MarketError('로컬 데이터 저장에 실패했습니다. 디스크 공간과 권한을 확인하세요.') from exc
             self.cache[symbol] = (time.monotonic(), result)
             return result
+
+    def derivatives(self, symbol):
+        """Funding, OI, long/short and taker history; collected only when an analysis runs."""
+        if symbol not in SYMBOLS:
+            raise ValueError('지원 종목은 BTCUSDT·ETHUSDT·SOLUSDT입니다.')
+        with self.lock:
+            try:
+                server_time = timestamp(self.request('/fapi/v1/time')['serverTime'])
+                funding = history_rows(self.request('/fapi/v1/fundingRate', symbol=symbol, limit=FUNDING_COUNT),
+                                       symbol, ('fundingRate',), 'fundingTime', signed=('fundingRate',))
+                periods, warnings = {}, []
+                for period, step in HISTORY_PERIODS.items():
+                    periods[period] = {}
+                    for metric, (path, fields) in HISTORY_ENDPOINTS.items():
+                        data = history_rows(self.request(path, symbol=symbol, period=period, limit=HISTORY_COUNT), symbol, fields)
+                        if data[-1]['time'] > server_time + 10000:
+                            raise MarketError('수급 이력 시각이 서버 시각보다 미래입니다.')
+                        if server_time - data[-1]['time'] > 2 * step + 60000:
+                            warnings.append(f'{period} {metric} 이력의 최근 값이 오래되었습니다.')
+                        if len(data) < HISTORY_COUNT:
+                            warnings.append(f'{period} {metric} 이력이 {HISTORY_COUNT}개보다 적습니다.')
+                        periods[period][metric] = data
+                if server_time - funding[-1]['time'] > 9 * 3600000:
+                    warnings.append('펀딩 이력의 최근 정산이 9시간 이상 지났습니다.')
+                history = {'serverTime': server_time, 'funding': funding, 'periods': periods, 'warnings': warnings}
+                save_derivatives(symbol, history, self.db_path)
+                return history
+            except (KeyError, TypeError, IndexError) as exc:
+                raise MarketError('수급 이력 응답 필드가 누락되거나 형식이 변경되었습니다.') from exc
+            except (sqlite3.Error, OSError) as exc:
+                raise MarketError('수급 이력 저장에 실패했습니다. 디스크 공간과 권한을 확인하세요.') from exc

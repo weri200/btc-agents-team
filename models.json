@@ -4,7 +4,7 @@
   "roles": {
     "technical": "mistralai/mistral-nemo-instruct-2407",
     "derivatives": "microsoft/phi-4",
-    "critic": "google/gemma-3-12b",
+    "critic": "google/gemma-4-12b",
     "judge": "huihui-qwen3.8-27b-abliterated"
   }
 }

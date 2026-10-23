@@ -3,11 +3,12 @@ import json
 import math
 import re
 import threading
+import time
 import uuid
 from decimal import Decimal
 from pathlib import Path
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 import indicators
 from market import iso
@@ -17,7 +18,8 @@ CONFIG = Path(__file__).resolve().parent / 'models.json'
 ROLES = {'technical': '기술 분석가', 'derivatives': '파생상품 분석가', 'critic': '반대 검토자', 'judge': '종합 판정자'}
 HORIZONS = {'intraday': ('단타', '5분 · 15분 · 1시간', ('5m', '15m', '1h')),
             'swing': ('스윙', '4시간 · 1일', ('4h', '1d'))}
-PROMPT_VERSION = 'local-team-v1'
+PROMPT_VERSION = 'local-team-v3'
+RETRY_DELAY = 5
 lock = threading.Lock()
 
 
@@ -39,6 +41,13 @@ def request(path, payload=None):
         if len(raw) > 500_000:
             raise AnalysisError('모델 응답이 너무 큽니다.')
         return json.loads(raw)
+    except HTTPError as exc:
+        try:
+            detail = json.loads(exc.read(4000)).get('error')
+            detail = detail.get('message') if isinstance(detail, dict) else detail
+        except (OSError, ValueError, AttributeError):
+            detail = None
+        raise AnalysisError(f'LM Studio 요청 오류 {exc.code}: {str(detail or exc.reason)[:300]}') from exc
     except (URLError, OSError, ValueError) as exc:
         raise AnalysisError('LM Studio 연결 또는 응답 오류입니다. 포트 1234와 모델 로드 상태를 확인하세요.') from exc
 
@@ -75,10 +84,22 @@ def obj(properties):
     return {'type': 'object', 'properties': properties, 'required': list(properties), 'additionalProperties': False}
 
 
-TEXT = {'type': 'string', 'minLength': 1, 'maxLength': 300}
+TEXT = {'type': 'string', 'minLength': 6, 'maxLength': 300}
 VERDICT = {'type': 'string', 'enum': ['long', 'short', 'wait']}
 SYNTHESIS = obj({'verdict': VERDICT, **{k: TEXT for k in ('summary', 'agreement', 'disagreement', 'condition')}})
 JUDGE_SCHEMA = obj({h: SYNTHESIS for h in HORIZONS})
+
+# Which facts each analyst sees, by indicator name. Narrow inputs keep each model in its lane.
+DERIVATIVE_FACTS = {'oiChange1Pct', 'oiChange24Pct', 'oiValueUsd', 'longShortRatio', 'longShortRatioChange24',
+                    'topLongShortRatio', 'topLongShortRatioChange24', 'takerBuySellRatio', 'takerBuySellAvg24',
+                    'fundingRatePct', 'fundingAvgPct', 'fundingMinPct', 'fundingMaxPct', 'fundingPositiveShare',
+                    'premiumPct', 'openInterest', 'markPrice', 'indexPrice'}
+PRICE_CONTEXT = {'change1Pct', 'change20Pct', 'volumeRatio20', 'lastPrice'}
+ROLE_FACTS = {
+    'technical': lambda name: name not in DERIVATIVE_FACTS,
+    'derivatives': lambda name: name in DERIVATIVE_FACTS or name in PRICE_CONTEXT,
+    'critic': lambda name: True,
+}
 
 
 def analyst_schema(keys):
@@ -106,7 +127,8 @@ def validate(value, schema):
     elif kind == 'number':
         if type(value) not in (int, float) or not math.isfinite(value):
             raise AnalysisError('모델 근거 값이 숫자가 아닙니다.')
-    elif not isinstance(value, str) or not value.strip() or len(value) > schema.get('maxLength', 300):
+    elif (not isinstance(value, str) or len(value.strip()) < schema.get('minLength', 1)
+          or len(value) > schema.get('maxLength', 300)):
         raise AnalysisError('모델 보고서의 문장 형식이 올바르지 않습니다.')
     elif 'enum' in schema and value not in schema['enum']:
         raise AnalysisError('모델 판정 또는 참조 값이 올바르지 않습니다.')
@@ -127,7 +149,7 @@ def matches(cited, actual):
 
 
 # Interval and indicator names contain digits but are not claims about values.
-NAMES = re.compile(r'(?i)\b(?:5m|15m|1h|4h|1d)\b|\b(?:rsi|sma|atr|ema|ma)\s?\d+|\d+\s?(?:분|시간|일)\s?봉?')
+NAMES = re.compile(r'(?i)\b(?:5m|15m|1h|4h|1d)\b|\b(?:rsi|sma|atr|ema|ma)\s?\d+|\d+\s?(?:분|시간|일|기간|봉|개)\s?봉?')
 
 
 def verify(agent, facts):
@@ -142,15 +164,20 @@ def verify(agent, facts):
             'numbersInText': bool(re.search(r'\d', NAMES.sub('', text)))}
 
 
-COMMON = ('Binance USDⓈ-M 무기한 선물의 공개 시장 데이터를 한국어로 분석합니다. 단타(intraday)는 5m/15m/1h, 스윙(swing)은 4h/1d 지표를 씁니다. '
+COMMON = ('모든 문장은 반드시 한국어로 씁니다. 영어 문장을 쓰지 마세요. Binance USDⓈ-M 무기한 선물의 공개 시장 데이터를 분석합니다. 단타(intraday)는 5m/15m/1h, 스윙(swing)은 4h/1d 지표를 씁니다. '
           '모든 지표는 서버가 마감 봉으로 계산한 facts에 있습니다. 직접 계산하지 말고 facts의 값만 근거로 쓰세요. '
+          'signals는 서버가 facts의 방향(위/아래, 증가/감소, 우위)을 문장으로 옮긴 것입니다. 방향과 해석은 signals와 반드시 일치시키세요. '
           '근거마다 ref에 facts의 키를, value에 그 키의 값을 그대로 적으세요. 서버가 value를 실제 값과 대조하며, 틀리면 의견이 관망으로 바뀝니다. '
           'claim, summary, counter, invalidation 문장에는 숫자를 쓰지 마세요. 숫자는 value에만 적습니다. '
+          '항목: summary는 판단 한 문장, claim은 그 지표가 뜻하는 해석, counter는 이 판단이 틀릴 수 있는 이유, invalidation은 판단을 철회할 관찰 조건입니다. '
+          '근거마다 다른 지표를 쓰고 같은 문장을 반복하지 마세요. 판정 단어(long, short, wait)만 적지 마세요. '
           '근거가 부족하거나 지표가 엇갈리면 wait. 확률, 목표가, 수익 보장, 주문 지시를 하지 마세요. 문장은 80자 이내로 씁니다.')
 ROLE_PROMPTS = {
     'technical': '역할: 기술 분석가. 이동평균 대비 위치, RSI, ATR, 변화율, 20봉 고저, 거래량 비율로 추세와 모멘텀을 판단합니다.',
-    'derivatives': ('역할: 파생상품 분석가. 펀딩비율, 마크-인덱스 프리미엄, 미결제약정과 거래량 비율로 수급을 판단합니다. '
-                    '펀딩과 미결제약정의 변화 이력은 없으므로 단일 값으로 신규 유입, 청산, 롱 쏠림을 단정하지 마세요.'),
+    'derivatives': ('역할: 파생상품 분석가. 포지션과 수급으로 판단합니다. 사용할 facts: 펀딩비율과 최근 정산 평균·최소·최대·양수 비율(market.funding*), '
+                    '마크-인덱스 프리미엄, 미결제약정 변화율(oiChange1Pct, oiChange24Pct), 전체 계정 롱숏 비율(longShortRatio)과 대형 트레이더 포지션 롱숏 비율(topLongShortRatio) 및 24기간 변화, '
+                    '테이커 매수/매도 비율(takerBuySellRatio)과 24기간 평균. 단타는 1h, 스윙은 4h 기간 값을 씁니다. '
+                    '가격 변화(change20Pct)와 미결제약정 변화를 함께 보고 해석하되, 신규 유입이나 청산은 가능성으로만 표현하세요.'),
     'critic': ('역할: 반대 검토자. team에 있는 다른 분석가 의견의 약점, 서로 맞지 않는 지표, 놓친 위험을 찾습니다. '
                '같은 facts로 반론 근거를 제시하고, 동의하더라도 남은 위험을 적으세요.'),
     'judge': ('역할: 종합 판정자. team의 의견을 정리해 종합 판정, 공통 의견, 남은 이견, 재검토 조건을 씁니다. '
@@ -160,14 +187,24 @@ ROLE_PROMPTS = {
 ROLE_LABELS = {'technical': '추세 · 모멘텀 · 지표', 'derivatives': '펀딩 · 프리미엄 · 미결제약정', 'critic': '반론 · 실패 조건'}
 
 
+def request_retry(path, payload):
+    # LM Studio can briefly reject a request while JIT swaps models; one retry covers that.
+    try:
+        return request(path, payload)
+    except AnalysisError:
+        time.sleep(RETRY_DELAY)
+        return request(path, payload)
+
+
 def chat(role, model, payload, schema, temperature):
     system = (ROLE_PROMPTS[role] if role == 'judge' else COMMON + ' ' + ROLE_PROMPTS[role])
     if 'qwen' in model.lower():
         system += ' /no_think'
     label = f'{ROLES[role]}({model})'
     try:
-        result = request('/chat/completions', {
-            'model': model, 'temperature': temperature, 'max_tokens': 4000, 'stream': False,
+        result = request_retry('/chat/completions', {
+            # Reasoning models (e.g. Gemma 4) otherwise spend the whole token budget thinking before the JSON.
+            'model': model, 'temperature': temperature, 'max_tokens': 4000, 'stream': False, 'reasoning_effort': 'none',
             'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],
             'response_format': {'type': 'json_schema', 'json_schema': {'name': role, 'strict': True, 'schema': schema}},
         })
@@ -194,18 +231,22 @@ def evidence_text(item, check):
 def analyze(snapshot, config=None):
     config = config or load_config()
     roles = config['roles']
-    facts = indicators.flatten(snapshot.get('indicators') or indicators.compute(snapshot))
-    keys = {h: sorted(k for k in facts if k.startswith('market.') or k.split('.')[0] in frames)
-            for h, (_, _, frames) in HORIZONS.items()}
+    # Recompute so derivatives history fetched for this analysis is included.
+    facts = indicators.flatten(indicators.compute(snapshot))
+    keys = {role: {h: sorted(k for k in facts if (k.startswith('market.') or k.split('.')[0] in frames)
+                             and allowed(k.split('.', 1)[1]))
+                   for h, (_, _, frames) in HORIZONS.items()}
+            for role, allowed in ROLE_FACTS.items()}
     stamp = iso(snapshot['serverTime'])
-    data = {'symbol': snapshot['symbol'], 'asOf': stamp, 'warnings': snapshot['warnings'],
-            'facts': {h: {k: facts[k] for k in keys[h]} for h in HORIZONS}}
-    schema = analyst_schema(keys)
+    warnings = list(snapshot['warnings']) + list((snapshot.get('derivatives') or {}).get('warnings', []))
+    data = {'symbol': snapshot['symbol'], 'asOf': stamp, 'warnings': list(warnings)}
 
     outputs, checks = {}, {}
 
-    def run(role, payload):
-        outputs[role] = chat(role, roles[role], payload, schema, config['temperature'])
+    def run(role, extra=None):
+        payload = {**data, 'facts': {h: {k: facts[k] for k in keys[role][h]} for h in HORIZONS},
+                   'signals': {h: indicators.describe(facts, keys[role][h]) for h in HORIZONS}, **(extra or {})}
+        outputs[role] = chat(role, roles[role], payload, analyst_schema(keys[role]), config['temperature'])
         checks[role] = {h: verify(outputs[role][h], facts) for h in HORIZONS}
 
     def effective(role, h):
@@ -216,16 +257,15 @@ def analyze(snapshot, config=None):
                      'counter': outputs[r][h]['counter'], 'verificationFailed': bool(checks[r][h]['failed'])}
                     for r in role_list] for h in HORIZONS}
 
-    run('technical', data)
-    run('derivatives', data)
-    run('critic', {**data, 'team': team_view(('technical', 'derivatives'))})
-    judge_input = {'symbol': snapshot['symbol'], 'asOf': stamp, 'warnings': snapshot['warnings'],
+    run('technical')
+    run('derivatives')
+    run('critic', {'team': team_view(('technical', 'derivatives'))})
+    judge_input = {'symbol': snapshot['symbol'], 'asOf': stamp, 'warnings': list(warnings),
                    'team': team_view(('technical', 'derivatives', 'critic')),
                    'missing': '뉴스·거시 자료는 연결되지 않아 해당 분석가는 관망입니다.'}
     judged = chat('judge', roles['judge'], judge_input, JUDGE_SCHEMA, config['temperature'])
 
     sources = [{'title': 'Binance 공개 API 스냅샷 · 서버 계산 지표', 'url': None, 'asOf': stamp}]
-    warnings = list(snapshot['warnings'])
     horizons = {}
     for h, (label, frames, _) in HORIZONS.items():
         agents = []
