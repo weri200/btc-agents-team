@@ -240,8 +240,10 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(self.post()[0], 409)
 
     def test_local_analysis_success_and_failure(self):
-        with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}), patch.object(server.collector, 'collect', return_value={}), \
+        with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}), \
+                patch.object(server.collector, 'collect', return_value={'serverTime': NOW}), \
                 patch.object(server.collector, 'derivatives', return_value={}), \
+                patch.object(server.macro, 'collect', return_value={}), \
                 patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}):
             status, body = self.post()
             self.assertEqual(status, 200)
@@ -255,7 +257,11 @@ class ServerTests(unittest.TestCase):
         with patch.object(server.local_llm, 'progress', progress):
             self.assertEqual(json.loads(self.get('/api/progress')[1]), {'state': 'idle'})
             self.assertEqual(self.get('/api/last-report')[0], 404)
-            with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}),                     patch.object(server.collector, 'collect', return_value={}),                     patch.object(server.collector, 'derivatives', return_value={}),                     patch.object(server.local_llm, 'analyze', return_value={'id': 'done-report'}):
+            with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}), \
+                    patch.object(server.collector, 'collect', return_value={'serverTime': NOW}), \
+                    patch.object(server.collector, 'derivatives', return_value={}), \
+                    patch.object(server.macro, 'collect', return_value={}), \
+                    patch.object(server.local_llm, 'analyze', return_value={'id': 'done-report'}):
                 self.assertEqual(self.post()[0], 200)
             state = json.loads(self.get('/api/progress')[1])
             self.assertEqual((state['state'], state['reportId']), ('done', 'done-report'))
