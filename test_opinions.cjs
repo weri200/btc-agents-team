@@ -16,6 +16,8 @@ assert.match(node('#horizons').innerHTML,/종합 의견이 여기에 표시됩�
 assert(!node('#horizons').innerHTML.includes(model.demo().horizons.intraday.summary));
 assert(!node('#agents').innerHTML.includes(model.demo().horizons.intraday.agents[0].summary));
 assert.equal(node('#agent-count').textContent,'00');
+assert.equal(node('#export').disabled,true);
+assert.equal(node('#symbol').onchange,undefined);  // Changing it used to swap a real report for an empty demo.
 console.log('Passed: demo report shows no made-up team opinions.');
 context.analyzed=Object.assign(model.demo(),{mode:'analysis',origin:'local-llm'});
 vm.runInContext('report=analyzed',context);
@@ -104,25 +106,31 @@ console.log('Passed: sidebar collapse and expansion with accessible state.');
   const stored=JSON.stringify([model.demo('BTCUSDT'),{schemaVersion:2},model.demo('ETHUSDT')]);
   // Startup: idle server -> analyze; finished run -> load its report; running elsewhere -> only show progress.
   const source=fs.readFileSync(require('node:path').join(__dirname,'dist/app.js'),'utf8');
-  const open=async(serverState)=>{
+  const open=async(serverState,hasLast=true)=>{
    const calls=[],last=Object.assign(model.demo(),{mode:'analysis',origin:'local-llm',id:'last-run'});
    const page=vm.createContext({...context,localStorage:{getItem:()=>stored,setItem(){}},fetch:async(url,options)=>{
     calls.push(url+' '+((options&&options.method)||'GET'));
     if(url==='/api/progress')return {ok:true,json:async()=>serverState};
-    if(url==='/api/last-report')return {ok:true,json:async()=>last};
+    if(url==='/api/last-report')return hasLast?{ok:true,json:async()=>last}:{ok:false,status:404,json:async()=>({error:'아직 완료된 분석이 없습니다.'})};
     return {ok:false,status:409,json:async()=>({error:'busy'})};
    }});
    vm.runInContext(source,page);
    await new Promise(r=>setTimeout(r,20));
    vm.runInContext('clearTimeout(progressTimer);clearTimeout(tickTimer)',page);  // A running state keeps polling.
-   return {calls,report:vm.runInContext('report.id',page)};
+   return {calls,report:vm.runInContext('report.id',page),status:vm.runInContext("$('#llm-status').textContent",page),exportOff:vm.runInContext("$('#export').disabled",page)};
   };
   let opened=await open({state:'idle'});
   assert(opened.calls.includes('/api/analyze POST'));
   opened=await open({state:'done',symbol:'BTCUSDT',reportId:'last-run',roles:[]});
   assert(!opened.calls.includes('/api/analyze POST'));assert.equal(opened.report,'last-run');
+  assert.equal(opened.exportOff,false);
+  // The server keeps its last good report while a newer run is going or after one failed; show it, keep the status.
   opened=await open({state:'running',symbol:'BTCUSDT',stage:'analyzing',elapsedMs:1,roles:[]});
-  assert(!opened.calls.includes('/api/analyze POST'));assert(!opened.calls.includes('/api/last-report GET'));
+  assert(!opened.calls.includes('/api/analyze POST'));assert.equal(opened.report,'last-run');assert.match(opened.status,/분석 중/);
+  opened=await open({state:'failed',symbol:'BTCUSDT',error:'LM Studio 꺼짐',roles:[]});
+  assert(!opened.calls.includes('/api/analyze POST'));assert.equal(opened.report,'last-run');assert.match(opened.status,/마지막 분석 실패: LM Studio 꺼짐/);
+  opened=await open({state:'failed',symbol:'BTCUSDT',error:'LM Studio 꺼짐',roles:[]},false);
+  assert.notEqual(opened.report,'last-run');assert.match(opened.status,/마지막 분석 실패/);assert(!/불러오기 실패/.test(opened.status));
   console.log('Passed: only the first visit after server start analyzes; later visits load the last result.');
   const other=vm.createContext({...context,localStorage:{getItem:()=>stored,setItem(){}},fetch:async()=>({ok:false,status:409,json:async()=>({})})});
   vm.runInContext(source,other);
