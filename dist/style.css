@@ -102,9 +102,11 @@ h3{margin:0;font-size:18px;font-weight:600}
 .setting-row{display:flex;justify-content:space-between;gap:12px;padding:17px 0;border-bottom:1px solid var(--line);font-size:12px}
 .setting-row span{color:var(--muted)}
 .integration-panel{margin:20px 0}
-.integration{display:grid;grid-template-columns:150px 1fr 65px;gap:16px;align-items:center;border-bottom:1px solid var(--line);padding:18px 0;font-size:12px}
+.integration{display:grid;grid-template-columns:150px 1fr 76px;gap:16px;align-items:center;border-bottom:1px solid var(--line);padding:18px 0;font-size:12px}
 .integration:last-child{border:0}
 .integration p{margin:0;color:var(--muted)}
+.integration .tag{justify-self:end}
+.integration.dropped b,.integration.dropped p{opacity:.6}
 .steps{padding-left:21px;color:var(--copy);font-size:12px;line-height:2.3;margin:18px 0}
 .panel>h2{margin-bottom:12px}
 dialog{background:var(--panel);border:1px solid var(--line);border-radius:14px;color:var(--text);width:min(640px,calc(100% - 30px));max-height:85vh;padding:28px;overflow:auto}
@@ -151,7 +153,7 @@ header{height:54px}
 .horizon-grid,.bottom-grid,.system-grid{grid-template-columns:1fr}
 .toolbar{align-items:flex-start;flex-direction:column}
 .meta{flex-wrap:wrap}
-.integration{grid-template-columns:95px 1fr 60px;gap:8px}
+.integration{grid-template-columns:95px 1fr 72px;gap:8px}
 .notice{font-size:12px}
 h1{font-size:25px}
 }

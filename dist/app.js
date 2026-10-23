@@ -44,7 +44,18 @@ $('#close-detail').onclick=()=>$('#detail').close();$('#detail').onclick=e=>{if(
 $('#export').onclick=()=>download(report);$('#sample').onclick=()=>download(demo());$('#import').onclick=()=>$('#file').click();
 $('#file').onchange=async()=>{const f=$('#file').files[0];if(!f)return;try{if(f.size>500000)throw new Error('500KB 이하의 보고서만 가져올 수 있습니다.');const r=validate(JSON.parse(await f.text()));const next=[r,...history.filter(x=>x.id!==r.id)].slice(0,20);report=r;history=next;const stored=saveHistory();render();page('desk');if(stored)toast('보고서를 가져왔습니다. 출처와 기준 시각을 확인하세요.')}catch(e){toast('가져오기 실패: '+e.message)}finally{$('#file').value=''}};
 $('#clear-history').onclick=()=>{if(!history.length){toast('지울 이력이 없습니다.');return}if(confirm('이 브라우저에 보관된 보고서 이력을 지울까요? 원본 파일은 유지됩니다.')){history=[];saveHistory();renderHistory()}};
-$('#integrations').innerHTML=[['Binance API','공개 시세·펀딩비·미결제약정·마감 캔들 수집'],['LM Studio','역할별 로컬 모델 분석 · 인용 수치 검증'],['OpenBB','거시·뉴스 등 배경 자료 수집'],['CCXT','Binance 선물 시세·펀딩·수급 자료 수집'],['TradingAgents','팀원별 분석과 찬반 검토, 종합 보고서 생성'],['NautilusTrader','백테스트와 비용·체결 가정 검증']].map(([n,d])=>`<div class="integration"><b>${n}</b><p>${d}</p><span class="tag neutral">${['Binance API','LM Studio'].includes(n)?'구현됨':'미연결'}</span></div>`).join('');
+// Status reflects what is actually wired up; "제외" tools were replaced by direct implementations.
+const toolStatus={done:['구현됨','long'],next:['다음 단계','wait'],planned:['예정','neutral'],later:['보류','neutral'],dropped:['제외','neutral']};
+$('#integrations').innerHTML=[
+ ['Binance API','시세·마크 가격·펀딩·미결제약정·마감 캔들 수집. 분석할 때 펀딩·OI·롱숏·테이커 이력도 받습니다.','done'],
+ ['LM Studio','역할별 로컬 모델 분석, 인용 수치 검증, 진행 상황 표시.','done'],
+ ['판정 채점','보고서를 저장하고 1시간·4시간·1일 뒤 가격으로 판정 적중을 기록합니다. 외부 도구 없이 직접 구현합니다.','next'],
+ ['OpenBB · FRED','뉴스·거시 분석가에게 금리·CPI 등 거시 지표, 발표 일정, 뉴스를 제공합니다. 뉴스 공급자는 연결 단계에서 정합니다.','planned'],
+ ['Binance 과거 데이터','data.binance.vision에서 과거 캔들·펀딩·OI를 일괄로 받아 채점과 장기 지표에 씁니다.','planned'],
+ ['NautilusTrader','규칙 기반 전략이 생기면 수수료·펀딩·슬리피지·체결 가정을 넣어 백테스트합니다.','later'],
+ ['CCXT','Binance 직접 호출로 대체했습니다. 여러 거래소 비교나 주문이 필요해지면 다시 검토합니다.','dropped'],
+ ['TradingAgents','팀 분석은 직접 구현했습니다. 역할 구성과 토론 방식만 참고합니다.','dropped']
+].map(([n,d,s])=>`<div class="integration ${s}"><b>${n}</b><p>${d}</p><span class="tag ${toolStatus[s][1]}">${toolStatus[s][0]}</span></div>`).join('');
 render();
 
 // Simplified provider marks for the progress cards; not official logo files.
