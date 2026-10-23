@@ -1,0 +1,40 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const model=require('./dist/model.js');
+const nodes=new Map();
+function node(selector){
+ if(!nodes.has(selector))nodes.set(selector,{innerHTML:'',textContent:'',value:'BTCUSDT',options:[{value:'BTCUSDT'}],addEventListener(name,fn){this[name]=fn},add(option){this.options.push(option)},setAttribute(name,value){this[name]=value}});
+ return nodes.get(selector);
+}
+const context=vm.createContext({DeskModel:model,document:{body:{classList:{toggle(name,value){this[name]=value}}},querySelector:node,querySelectorAll:()=>[],addEventListener(){}},localStorage:{getItem:()=>null},Option:function(text,value){this.value=value},setTimeout,clearTimeout});
+vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'dist/app.js'),'utf8'),context);
+for(const horizon of ['intraday','swing']){
+ vm.runInContext(`horizon='${horizon}';render()`,context);
+ const html=node('#agents').innerHTML;
+ assert.equal((html.match(/class="agent-explanation"/g)||[]).length,4);
+ assert.equal((html.match(/<p><span>/g)||[]).length,12);
+ assert(html.includes(model.demo().horizons[horizon].agents[0].invalidation));
+}
+node('#chart-symbol').value='ETHUSDT';node('#chart-symbol').change();
+assert.match(node('#opinion-context').textContent,/차트 종목과 다릅니다/);
+const imported=model.demo();imported.mode='analysis';imported.symbol='ETHUSDT';
+imported.horizons.swing.agents[0].evidence[0]='<img src=x onerror=alert(1)>';
+context.imported=imported;
+vm.runInContext('report=validate(imported);render()',context);
+assert.match(node('#opinion-context').textContent,/가져온 보고서/);
+assert(!node('#opinion-context').textContent.includes('차트 종목과 다릅니다'));
+assert(node('#agents').innerHTML.includes('&lt;img'));
+assert(!node('#agents').innerHTML.includes('<img'));
+console.log('Passed: both horizons, three explanation rows, symbol mismatch, imported report, HTML escaping.');
+
+node('#sidebar').hidden=false;
+node('#menu-toggle').onclick();
+assert.equal(node('#sidebar').hidden,true);
+assert.equal(node('#menu-toggle')['aria-expanded'],'false');
+assert.equal(context.document.body.classList['sidebar-collapsed'],true);
+node('#menu-toggle').onclick();
+assert.equal(node('#sidebar').hidden,false);
+assert.equal(node('#menu-toggle')['aria-expanded'],'true');
+assert.equal(context.document.body.classList['sidebar-collapsed'],false);
+console.log('Passed: sidebar collapse and expansion with accessible state.');
