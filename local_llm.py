@@ -20,7 +20,92 @@ HORIZONS = {'intraday': ('단타', '5분 · 15분 · 1시간', ('5m', '15m', '1h
             'swing': ('스윙', '4시간 · 1일', ('4h', '1d'))}
 PROMPT_VERSION = 'local-team-v3'
 RETRY_DELAY = 5
+TIMINGS = Path(__file__).resolve().parent / 'data' / 'llm_timings.json'
+DEFAULT_EXPECTED_MS = 60000
 lock = threading.Lock()
+
+
+class Progress:
+    """Live state of the one running analysis, readable from any browser window."""
+    def __init__(self, timings_path=None):
+        self.timings_path = timings_path
+        self.guard = threading.Lock()
+        self.state = {'state': 'idle'}
+        self.last_report = None
+
+    def path(self):
+        return Path(self.timings_path or TIMINGS)
+
+    def timings(self):
+        try:
+            data = json.loads(self.path().read_text(encoding='utf-8'))
+            return {k: v for k, v in data.items() if isinstance(k, str) and type(v) is int and 0 < v < 3_600_000}
+        except (OSError, ValueError, AttributeError):
+            return {}
+
+    def begin(self, symbol, roles):
+        expected = self.timings()
+        with self.guard:
+            self.state = {'state': 'running', 'stage': 'collecting', 'symbol': symbol, 'started': time.monotonic(),
+                          'error': None, 'roles': [{'role': r, 'name': ROLES[r], 'model': m, 'status': 'pending',
+                                                    'expectedMs': expected.get(m, DEFAULT_EXPECTED_MS)}
+                                                   for r, m in roles.items()]}
+
+    def role(self, role, status):
+        with self.guard:
+            if self.state.get('state') != 'running':
+                return
+            self.state['stage'] = 'analyzing'
+            for item in self.state['roles']:
+                if item['role'] != role:
+                    continue
+                item['status'] = status
+                if status == 'running':
+                    item['started'] = time.monotonic()
+                elif 'started' in item:
+                    item['durationMs'] = round((time.monotonic() - item['started']) * 1000)
+                if status == 'done':
+                    self.remember(item['model'], item['durationMs'])
+
+    def remember(self, model, duration):
+        data = self.timings()
+        data[model] = max(duration, 1)
+        try:
+            self.path().parent.mkdir(parents=True, exist_ok=True)
+            self.path().write_text(json.dumps(data), encoding='utf-8')
+        except OSError:
+            pass  # Estimates only; a failed write must not fail the analysis.
+
+    def finish(self, report=None, error=None):
+        with self.guard:
+            if self.state.get('state') != 'running':
+                return
+            self.state.update(state='failed' if error else 'done', error=error,
+                              durationMs=round((time.monotonic() - self.state['started']) * 1000))
+            for item in self.state['roles']:
+                if error and item['status'] == 'running':
+                    item['status'] = 'failed'
+                    item['durationMs'] = round((time.monotonic() - item['started']) * 1000)
+            if report:
+                self.last_report = report
+                self.state['reportId'] = report['id']
+
+    def snapshot(self):
+        with self.guard:
+            now = time.monotonic()
+            result = {k: v for k, v in self.state.items() if k not in ('started', 'roles')}
+            if 'started' in self.state:
+                # A finished run reports its fixed duration, not time since it started.
+                result['elapsedMs'] = (round((now - self.state['started']) * 1000) if self.state['state'] == 'running'
+                                       else self.state['durationMs'])
+            if 'roles' in self.state:
+                result['roles'] = [{**{k: v for k, v in r.items() if k != 'started'},
+                                    **({'elapsedMs': round((now - r['started']) * 1000)} if r['status'] == 'running' else {})}
+                                   for r in self.state['roles']]
+            return result
+
+
+progress = Progress()
 
 
 class AnalysisError(Exception):
@@ -246,7 +331,9 @@ def analyze(snapshot, config=None):
     def run(role, extra=None):
         payload = {**data, 'facts': {h: {k: facts[k] for k in keys[role][h]} for h in HORIZONS},
                    'signals': {h: indicators.describe(facts, keys[role][h]) for h in HORIZONS}, **(extra or {})}
+        progress.role(role, 'running')
         outputs[role] = chat(role, roles[role], payload, analyst_schema(keys[role]), config['temperature'])
+        progress.role(role, 'done')
         checks[role] = {h: verify(outputs[role][h], facts) for h in HORIZONS}
 
     def effective(role, h):
@@ -263,7 +350,9 @@ def analyze(snapshot, config=None):
     judge_input = {'symbol': snapshot['symbol'], 'asOf': stamp, 'warnings': list(warnings),
                    'team': team_view(('technical', 'derivatives', 'critic')),
                    'missing': '뉴스·거시 자료는 연결되지 않아 해당 분석가는 관망입니다.'}
+    progress.role('judge', 'running')
     judged = chat('judge', roles['judge'], judge_input, JUDGE_SCHEMA, config['temperature'])
+    progress.role('judge', 'done')
 
     sources = [{'title': 'Binance 공개 API 스냅샷 · 서버 계산 지표', 'url': None, 'asOf': stamp}]
     horizons = {}

@@ -182,5 +182,57 @@ class LocalTeamTests(unittest.TestCase):
                 llm.status()
 
 
+class ProgressTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / 'timings.json'
+        self.progress = llm.Progress(self.path)
+
+    def test_role_lifecycle_and_timing_memory(self):
+        self.progress.begin('BTCUSDT', CONFIG['roles'])
+        state = self.progress.snapshot()
+        self.assertEqual((state['state'], state['stage'], state['symbol']), ('running', 'collecting', 'BTCUSDT'))
+        self.assertEqual([r['status'] for r in state['roles']], ['pending'] * 4)
+        self.assertEqual(state['roles'][0]['expectedMs'], llm.DEFAULT_EXPECTED_MS)
+        self.progress.role('technical', 'running')
+        state = self.progress.snapshot()
+        self.assertEqual(state['stage'], 'analyzing')
+        self.assertIn('elapsedMs', state['roles'][0])
+        self.assertNotIn('started', state['roles'][0])
+        self.progress.role('technical', 'done')
+        self.assertIn('durationMs', self.progress.snapshot()['roles'][0])
+        self.progress.role('derivatives', 'running')
+        self.progress.finish(error='LM Studio 오류')
+        state = self.progress.snapshot()
+        self.assertEqual((state['state'], state['error']), ('failed', 'LM Studio 오류'))
+        self.assertEqual([r['status'] for r in state['roles']][:2], ['done', 'failed'])
+        self.assertIn('model-a', json.loads(self.path.read_text(encoding='utf-8')))
+        self.progress.begin('ETHUSDT', CONFIG['roles'])
+        self.assertLess(self.progress.snapshot()['roles'][0]['expectedMs'], 60000)
+
+    def test_finish_keeps_report_and_ignores_when_idle(self):
+        self.progress.finish(error='무시')
+        self.assertEqual(self.progress.snapshot(), {'state': 'idle'})
+        self.progress.begin('BTCUSDT', CONFIG['roles'])
+        self.progress.finish(report={'id': 'r1'})
+        self.progress.finish(error='늦은 오류')
+        state = self.progress.snapshot()
+        self.assertEqual((state['state'], state['reportId']), ('done', 'r1'))
+        self.assertEqual(state['elapsedMs'], state['durationMs'])
+        self.assertEqual(self.progress.last_report, {'id': 'r1'})
+
+    def test_bad_timing_file_falls_back(self):
+        self.path.write_text('{"model-a": -5, "model-b": "x"}', encoding='utf-8')
+        self.progress.begin('BTCUSDT', CONFIG['roles'])
+        self.assertEqual({r['expectedMs'] for r in self.progress.snapshot()['roles']}, {llm.DEFAULT_EXPECTED_MS})
+
+    def test_analyze_reports_each_role(self):
+        seen = []
+        with patch.object(llm.progress, 'role', side_effect=lambda r, s: seen.append((r, s))),                 patch.object(llm, 'request', side_effect=FakeLMStudio()):
+            llm.analyze(make_snapshot(), CONFIG)
+        self.assertEqual(seen, [(r, s) for r in ('technical', 'derivatives', 'critic', 'judge') for s in ('running', 'done')])
+
+
 if __name__ == '__main__':
     unittest.main()
