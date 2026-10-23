@@ -25,7 +25,7 @@ def make_snapshot():
 class FakeLMStudio:
     """Answers each role from the facts it was sent; `wrong` roles cite a bad value."""
     def __init__(self, verdicts=None, judge='long', wrong=()):
-        self.verdicts = verdicts or {'technical': 'long', 'derivatives': 'long', 'critic': 'wait'}
+        self.verdicts = verdicts or {'technical': 'long', 'derivatives': 'long', 'macro': 'wait', 'critic': 'wait'}
         self.judge, self.wrong, self.calls, self.payloads = judge, set(wrong), [], []
 
     def __call__(self, path, payload=None):
@@ -39,13 +39,25 @@ class FakeLMStudio:
                     for h in llm.HORIZONS}
         else:
             body = {}
+            schema = payload['response_format']['json_schema'].get('schema') or {}
             for h in llm.HORIZONS:
-                key = f"{llm.HORIZONS[h][2][0]}.{'change1Pct' if role == 'derivatives' else 'rsi14'}"
+                key = ('macro.vix' if role == 'macro' else
+                       f"{llm.HORIZONS[h][2][0]}.{'change1Pct' if role == 'derivatives' else 'rsi14'}")
                 value = sent['facts'][h][key] + (30 if role in self.wrong else 0.004)
-                body[h] = {'verdict': self.verdicts[role], 'summary': 'RSI14 기준 과열 구간입니다.',
-                           'evidence': [{'claim': '모멘텀이 강합니다.', 'ref': key, 'value': value}],
+                body[h] = {'verdict': self.verdicts[role], 'summary': '- RSI14 기준 과열 구간입니다.,',
+                           'evidence': [{'ref': key, 'value': value, 'claim': '모멘텀이 강합니다.'}],
                            'counter': '반락할 가능성이 있습니다.', 'invalidation': '추세선을 이탈하면 철회합니다.'}
+                if 'news' in schema.get('properties', {}).get(h, {}).get('properties', {}):
+                    body[h]['news'] = [n['id'] for n in sent['news'][:1]] * 2  # Duplicate ids are collapsed.
         return {'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(body, ensure_ascii=False)}}]}
+
+
+MACRO = {'facts': {'macro.vix': 19.03, 'macro.us10yPct': 5.13, 'macro.spxChange1dPct': -1.2},
+         'dates': {'vix': '2026-05-27'}, 'warnings': ['거시 주의'],
+         'calendar': [{'time': '2026-05-28T12:30:00+00:00', 'event': 'CPI', 'status': '예정', 'consensus': '', 'previous': '', 'actual': ''}],
+         'news': [{'id': 'news-1', 'date': '2026-05-27', 'title': 'Bitcoin ETF inflows', 'excerpt': 'x', 'publisher': 'Zacks',
+                   'url': 'https://www.nasdaq.com/a'}]}
+MACRO_CONFIG = {'roles': {**CONFIG['roles'], 'macro': 'model-e'}, 'temperature': 0.1}
 
 
 class LocalTeamTests(unittest.TestCase):
@@ -232,6 +244,91 @@ class ProgressTests(unittest.TestCase):
         with patch.object(llm.progress, 'role', side_effect=lambda r, s: seen.append((r, s))),                 patch.object(llm, 'request', side_effect=FakeLMStudio()):
             llm.analyze(make_snapshot(), CONFIG)
         self.assertEqual(seen, [(r, s) for r in ('technical', 'derivatives', 'critic', 'judge') for s in ('running', 'done')])
+
+
+
+class MacroRoleTests(unittest.TestCase):
+    def setUp(self):
+        self.snapshot = make_snapshot()
+
+    def run_team(self, fake, macro=MACRO, config=MACRO_CONFIG):
+        self.snapshot['macro'] = macro
+        with patch.object(llm, 'request', side_effect=fake):
+            return llm.analyze(self.snapshot, config)
+
+    def test_macro_runs_between_derivatives_and_critic(self):
+        fake = FakeLMStudio()
+        report = self.run_team(fake)
+        self.assertEqual([r for r, _, _ in fake.calls], ['technical', 'derivatives', 'macro', 'critic', 'judge'])
+        macro_payload = fake.calls[2][2]
+        self.assertTrue(all(k.startswith('macro.') for h in llm.HORIZONS for k in macro_payload['facts'][h]))
+        self.assertEqual(macro_payload['news'][0]['id'], 'news-1')
+        self.assertNotIn('url', macro_payload['news'][0])
+        self.assertEqual(macro_payload['calendar'][0]['event'], 'CPI')
+        self.assertNotIn('macro.vix', fake.calls[0][2]['facts']['intraday'])
+        self.assertIn('macro.vix', fake.calls[3][2]['facts']['intraday'])
+        self.assertEqual([t['role'] for t in fake.calls[3][2]['team']['swing']], ['기술 분석가', '파생상품 분석가', '뉴스·거시 분석가'])
+        self.assertEqual(len(fake.calls[4][2]['team']['swing']), 4)
+        self.assertNotIn('missing', fake.calls[4][2])
+        agent = report['horizons']['intraday']['agents'][2]
+        self.assertEqual((agent['id'], agent['model'], agent['verification']['matched']), ('macro', 'model-e', 1))
+        self.assertEqual(agent['news'], ['news-1'])
+        self.assertEqual(agent['sources'][1]['url'], 'https://www.nasdaq.com/a')
+        self.assertEqual(agent['sources'][1]['asOf'], '2026-05-27T00:00:00+00:00')
+        self.assertIn('2026-05-27', agent['sources'][0]['title'])
+        self.assertEqual(agent['summary'], 'RSI14 기준 과열 구간입니다.')  # Bullet and trailing comma removed.
+        self.assertIn('거시 주의', report['warnings'])
+        self.assertEqual(report['facts']['macro.vix'], 19.03)
+
+    def test_macro_without_news_sends_empty_enum(self):
+        fake = FakeLMStudio()
+        self.run_team(fake, {**MACRO, 'news': []})
+        schema = fake.payloads[2]['response_format']['json_schema']['schema']['properties']['intraday']['properties']['news']
+        self.assertEqual((schema['maxItems'], schema['items']['enum']), (0, ['none']))
+
+    def test_unavailable_macro_keeps_placeholder(self):
+        fake = FakeLMStudio()
+        seen = []
+        with patch.object(llm.progress, 'role', side_effect=lambda r, s: seen.append((r, s))):
+            report = self.run_team(fake, {'error': 'OpenBB 가상환경(.venv)이 없습니다.'})
+        self.assertEqual([r for r, _, _ in fake.calls], ['technical', 'derivatives', 'critic', 'judge'])
+        self.assertIn(('macro', 'skipped'), seen)
+        agent = report['horizons']['swing']['agents'][2]
+        self.assertEqual((agent['id'], agent['verdict'], agent['model']), ('macro', 'wait', '미실행 · 자료 부족'))
+        self.assertIn('가상환경', agent['evidence'][0])
+        self.assertIn('missing', fake.calls[3][2])
+        self.assertTrue(any('뉴스·거시 분석가: OpenBB 가상환경' in w for w in report['warnings']))
+
+    def test_macro_role_is_optional_in_config(self):
+        fake = FakeLMStudio()
+        report = self.run_team(fake, config=CONFIG)
+        self.assertNotIn('macro', [r for r, _, _ in fake.calls])
+        self.assertIn('models.json', report['horizons']['intraday']['agents'][2]['evidence'][0])
+        self.assertNotIn('macro.vix', report['facts'])
+
+    def test_wrong_macro_citation_forces_wait(self):
+        report = self.run_team(FakeLMStudio(verdicts={'technical': 'long', 'derivatives': 'long', 'macro': 'short', 'critic': 'wait'},
+                                            wrong={'macro'}))
+        agent = report['horizons']['intraday']['agents'][2]
+        self.assertEqual((agent['verdict'], agent['verification']['originalVerdict']), ('wait', 'short'))
+
+    def test_config_order_and_describe(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'models.json'
+            roles = {'judge': 'd', 'critic': 'c', 'macro': 'e', 'derivatives': 'b', 'technical': 'a'}
+            path.write_text(json.dumps({'roles': roles}), encoding='utf-8')
+            self.assertEqual(list(llm.load_config(path)['roles']), ['technical', 'derivatives', 'macro', 'critic', 'judge'])
+            path.write_text(json.dumps({'roles': {**roles, 'extra': 'x'}}), encoding='utf-8')
+            with self.assertRaises(llm.AnalysisError):
+                llm.load_config(path)
+        lines = indicators.describe({'macro.us10yChange5dBp': -6.0, 'macro.vix': 26.0, 'macro.curve2s10sBp': -5.0},
+                                    ['macro.us10yChange5dBp', 'macro.vix', 'macro.curve2s10sBp'])
+        self.assertEqual(lines, ['미국 10년 금리 5일 변화 -6.0bp: 하락', 'VIX 26.0: 변동성 경계 높음(25 이상)',
+                                 '미국 10년-2년 금리차 -5.0bp: 역전(2년이 높음)'])
+
+    def test_tidy_keeps_minus_signs(self):
+        self.assertEqual(llm.tidy({'a': ['- 문장입니다.,', '-0.5% 하락', '* 강조 문장*']}),
+                         {'a': ['문장입니다.', '-0.5% 하락', '강조 문장']})
 
 
 if __name__ == '__main__':

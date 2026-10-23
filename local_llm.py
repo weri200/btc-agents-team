@@ -15,10 +15,12 @@ from market import iso
 
 BASE = 'http://127.0.0.1:1234/v1'
 CONFIG = Path(__file__).resolve().parent / 'models.json'
-ROLES = {'technical': '기술 분석가', 'derivatives': '파생상품 분석가', 'critic': '반대 검토자', 'judge': '종합 판정자'}
+ROLES = {'technical': '기술 분석가', 'derivatives': '파생상품 분석가', 'macro': '뉴스·거시 분석가',
+         'critic': '반대 검토자', 'judge': '종합 판정자'}
+OPTIONAL_ROLES = {'macro'}  # Without it (or without OpenBB data) the macro seat stays a fixed wait.
 HORIZONS = {'intraday': ('단타', '5분 · 15분 · 1시간', ('5m', '15m', '1h')),
             'swing': ('스윙', '4시간 · 1일', ('4h', '1d'))}
-PROMPT_VERSION = 'local-team-v3'
+PROMPT_VERSION = 'local-team-v4'
 RETRY_DELAY = 5
 TIMINGS = Path(__file__).resolve().parent / 'data' / 'llm_timings.json'
 DEFAULT_EXPECTED_MS = 60000
@@ -143,13 +145,14 @@ def load_config(path=None):
     except (OSError, ValueError) as exc:
         raise AnalysisError('models.json을 읽을 수 없습니다. 파일과 JSON 형식을 확인하세요.') from exc
     roles = config.get('roles') if isinstance(config, dict) else None
-    if (not isinstance(roles, dict) or set(roles) != set(ROLES)
+    if (not isinstance(roles, dict) or not set(ROLES) - OPTIONAL_ROLES <= set(roles) <= set(ROLES)
             or any(not isinstance(m, str) or not m.strip() or len(m) > 200 for m in roles.values())):
-        raise AnalysisError('models.json의 roles에 technical, derivatives, critic, judge 모델 ID가 모두 필요합니다.')
+        raise AnalysisError('models.json의 roles에 technical, derivatives, critic, judge 모델 ID가 필요합니다. macro는 선택입니다.')
     temperature = config.get('temperature', 0.1)
     if type(temperature) not in (int, float) or not 0 <= temperature <= 1:
         raise AnalysisError('models.json의 temperature는 0~1 사이 숫자여야 합니다.')
-    return {'roles': {k: v.strip() for k, v in roles.items()}, 'temperature': float(temperature)}
+    # Keep the run order regardless of how the file lists roles.
+    return {'roles': {k: roles[k].strip() for k in ROLES if k in roles}, 'temperature': float(temperature)}
 
 
 def status():
@@ -181,19 +184,25 @@ DERIVATIVE_FACTS = {'oiChange1Pct', 'oiChange24Pct', 'oiValueUsd', 'longShortRat
                     'premiumPct', 'openInterest', 'markPrice', 'indexPrice'}
 PRICE_CONTEXT = {'change1Pct', 'change20Pct', 'volumeRatio20', 'lastPrice'}
 ROLE_FACTS = {
-    'technical': lambda name: name not in DERIVATIVE_FACTS,
-    'derivatives': lambda name: name in DERIVATIVE_FACTS or name in PRICE_CONTEXT,
-    'critic': lambda name: True,
+    'technical': lambda key, name: not key.startswith('macro.') and name not in DERIVATIVE_FACTS,
+    'derivatives': lambda key, name: not key.startswith('macro.') and (name in DERIVATIVE_FACTS or name in PRICE_CONTEXT),
+    'macro': lambda key, name: key.startswith('macro.'),
+    'critic': lambda key, name: True,
 }
 
 
-def analyst_schema(keys):
-    # The ref enum lets constrained decoding reject made-up indicator names outright.
+def analyst_schema(keys, news_ids=None):
+    # The ref enum lets constrained decoding reject made-up indicator names outright; news ids work the same way.
     def agent(horizon):
-        evidence = obj({'claim': TEXT, 'ref': {'type': 'string', 'enum': keys[horizon]}, 'value': {'type': 'number'}})
-        return obj({'verdict': VERDICT, 'summary': TEXT,
-                    'evidence': {'type': 'array', 'minItems': 1, 'maxItems': 4, 'items': evidence},
-                    'counter': TEXT, 'invalidation': TEXT})
+        # ref and value come before claim so the model picks a fact first and then describes it.
+        evidence = obj({'ref': {'type': 'string', 'enum': keys[horizon]}, 'value': {'type': 'number'}, 'claim': TEXT})
+        fields = {'verdict': VERDICT, 'summary': TEXT,
+                  'evidence': {'type': 'array', 'minItems': 1, 'maxItems': 4, 'items': evidence},
+                  'counter': TEXT, 'invalidation': TEXT}
+        if news_ids is not None:
+            fields['news'] = {'type': 'array', 'minItems': 0, 'maxItems': 3 if news_ids else 0,
+                              'items': {'type': 'string', 'enum': news_ids or ['none']}}
+        return obj(fields)
     return obj({h: agent(h) for h in HORIZONS})
 
 
@@ -234,7 +243,8 @@ def matches(cited, actual):
 
 
 # Interval and indicator names contain digits but are not claims about values.
-NAMES = re.compile(r'(?i)\b(?:5m|15m|1h|4h|1d)\b|\b(?:rsi|sma|atr|ema|ma)\s?\d+|\d+\s?(?:분|시간|일|기간|봉|개)\s?봉?')
+NAMES = re.compile(r'(?i)\b(?:5m|15m|1h|4h|1d)\b|\b(?:rsi|sma|atr|ema|ma)\s?\d+|\d+\s?(?:분|시간|일|기간|봉|개|년)\s?봉?'
+                   r'|s&p\s?500|나스닥\s?100|2s10s')
 
 
 def verify(agent, facts):
@@ -265,11 +275,17 @@ ROLE_PROMPTS = {
                     '가격 변화(change20Pct)와 미결제약정 변화를 함께 보고 해석하되, 신규 유입이나 청산은 가능성으로만 표현하세요.'),
     'critic': ('역할: 반대 검토자. team에 있는 다른 분석가 의견의 약점, 서로 맞지 않는 지표, 놓친 위험을 찾습니다. '
                '같은 facts로 반론 근거를 제시하고, 동의하더라도 남은 위험을 적으세요.'),
+    'macro': ('역할: 뉴스·거시 분석가. 미국 2년·10년 국채 금리와 5일 변화(bp), 장단기 금리차, VIX와 변화율, S&P500·나스닥100 변화율로 '
+              '위험 선호를 판단합니다. 참고 자료: calendar는 발표됐거나 예정된 미국 주요 경제 지표, news는 코인 관련 기사 제목과 요약입니다. '
+              '기사를 근거로 쓰면 그 기사 id를 news에 적으세요. 기사에 없는 사실, 수치, 발표 결과를 만들지 마세요. '
+              '기사와 지수는 날짜 단위이고 미국 장 마감 기준이라 최신 상황과 차이가 있을 수 있습니다. '
+              '단타는 1일 변화와 가까운 일정, 스윙은 5일 변화와 금리 흐름을 중시합니다. 예정된 지표의 결과는 추측하지 마세요.'),
     'judge': ('역할: 종합 판정자. team의 의견을 정리해 종합 판정, 공통 의견, 남은 이견, 재검토 조건을 씁니다. '
               'verificationFailed가 true인 의견은 신뢰하지 마세요. 새 근거나 숫자를 만들지 마세요. 숫자는 쓰지 않습니다. '
               '의견이 갈리거나 근거가 약하면 wait. 확률, 목표가, 주문 지시를 하지 마세요.'),
 }
-ROLE_LABELS = {'technical': '추세 · 모멘텀 · 지표', 'derivatives': '펀딩 · 프리미엄 · 미결제약정', 'critic': '반론 · 실패 조건'}
+ROLE_LABELS = {'technical': '추세 · 모멘텀 · 지표', 'derivatives': '펀딩 · 프리미엄 · 미결제약정',
+               'macro': '금리 · 위험 선호 · 뉴스', 'critic': '반론 · 실패 조건'}
 
 
 def request_retry(path, payload):
@@ -279,6 +295,24 @@ def request_retry(path, payload):
     except AnalysisError:
         time.sleep(RETRY_DELAY)
         return request(path, payload)
+
+
+def tidy(value):
+    """Strip markdown bullets, emphasis, and dangling commas some models add to plain sentences."""
+    if isinstance(value, dict):
+        return {k: tidy(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [tidy(v) for v in value]
+    if isinstance(value, str):
+        # Only a bullet followed by whitespace is removed, so a leading minus sign survives.
+        cleaned = re.sub(r'^(?:\s*[-*•·]\s+)+', '', value.strip())
+        if cleaned.count('*') == 1 and cleaned.endswith('*'):
+            cleaned = cleaned[:-1]  # Closing half of an emphasis whose opener was taken as a bullet.
+        elif len(cleaned) > 2 and cleaned.startswith('*') and cleaned.endswith('*'):
+            cleaned = cleaned.strip('*').strip()
+        cleaned = cleaned.rstrip(',').strip()
+        return cleaned or value
+    return value
 
 
 def chat(role, model, payload, schema, temperature):
@@ -299,7 +333,7 @@ def chat(role, model, payload, schema, temperature):
         choice = result['choices'][0]
         if choice.get('finish_reason') != 'stop':
             raise AnalysisError(f'{label} 응답이 끝나지 않아 보고서를 사용하지 않았습니다.')
-        return validate(json.loads(choice['message']['content']), schema)
+        return tidy(validate(json.loads(choice['message']['content']), schema))
     except AnalysisError as exc:
         raise AnalysisError(str(exc) if label in str(exc) else f'{label}: {exc}') from exc
     except (KeyError, IndexError, TypeError, ValueError) as exc:
@@ -313,26 +347,40 @@ def evidence_text(item, check):
     return f"{item['claim']} ({item['ref']} 인용 {item['value']} · 실제 {actual} · 불일치)"
 
 
+def macro_sources_title(macro):
+    dates = ', '.join(f'{k} {v}' for k, v in macro.get('dates', {}).items())
+    return f'OpenBB 거시 지표 · 기준일 {dates}' if dates else 'OpenBB 거시 지표'
+
+
 def analyze(snapshot, config=None):
     config = config or load_config()
     roles = config['roles']
     # Recompute so derivatives history fetched for this analysis is included.
     facts = indicators.flatten(indicators.compute(snapshot))
-    keys = {role: {h: sorted(k for k in facts if (k.startswith('market.') or k.split('.')[0] in frames)
-                             and allowed(k.split('.', 1)[1]))
+    macro = snapshot.get('macro') if isinstance(snapshot.get('macro'), dict) else {}
+    macro_ready = 'macro' in roles and bool(macro.get('facts'))
+    if macro_ready:
+        facts.update(macro['facts'])
+    # market.* and macro.* apply to both horizons; interval keys only to their own horizon.
+    keys = {role: {h: sorted(k for k in facts if (k.startswith(('market.', 'macro.')) or k.split('.')[0] in frames)
+                             and allowed(k, k.split('.', 1)[1]))
                    for h, (_, _, frames) in HORIZONS.items()}
             for role, allowed in ROLE_FACTS.items()}
     stamp = iso(snapshot['serverTime'])
-    warnings = list(snapshot['warnings']) + list((snapshot.get('derivatives') or {}).get('warnings', []))
+    warnings = (list(snapshot['warnings']) + list((snapshot.get('derivatives') or {}).get('warnings', []))
+                + list(macro.get('warnings', [])))
+    if 'macro' in roles and not macro_ready:
+        warnings.append('뉴스·거시 분석가: ' + (macro.get('error') or 'OpenBB 자료가 없어 실행하지 않았습니다.'))
     data = {'symbol': snapshot['symbol'], 'asOf': stamp, 'warnings': list(warnings)}
+    news = {n['id']: n for n in macro.get('news', [])} if macro_ready else {}
 
     outputs, checks = {}, {}
 
-    def run(role, extra=None):
+    def run(role, extra=None, news_ids=None):
         payload = {**data, 'facts': {h: {k: facts[k] for k in keys[role][h]} for h in HORIZONS},
                    'signals': {h: indicators.describe(facts, keys[role][h]) for h in HORIZONS}, **(extra or {})}
         progress.role(role, 'running')
-        outputs[role] = chat(role, roles[role], payload, analyst_schema(keys[role]), config['temperature'])
+        outputs[role] = chat(role, roles[role], payload, analyst_schema(keys[role], news_ids), config['temperature'])
         progress.role(role, 'done')
         checks[role] = {h: verify(outputs[role][h], facts) for h in HORIZONS}
 
@@ -344,12 +392,21 @@ def analyze(snapshot, config=None):
                      'counter': outputs[r][h]['counter'], 'verificationFailed': bool(checks[r][h]['failed'])}
                     for r in role_list] for h in HORIZONS}
 
+    analysts = ['technical', 'derivatives']
     run('technical')
     run('derivatives')
-    run('critic', {'team': team_view(('technical', 'derivatives'))})
+    if macro_ready:
+        run('macro', {'calendar': macro['calendar'],
+                      'news': [{k: n[k] for k in ('id', 'date', 'publisher', 'title', 'excerpt')} for n in news.values()]},
+            news_ids=list(news))
+        analysts.append('macro')
+    elif 'macro' in roles:
+        progress.role('macro', 'skipped')
+    run('critic', {'team': team_view(analysts)})
     judge_input = {'symbol': snapshot['symbol'], 'asOf': stamp, 'warnings': list(warnings),
-                   'team': team_view(('technical', 'derivatives', 'critic')),
-                   'missing': '뉴스·거시 자료는 연결되지 않아 해당 분석가는 관망입니다.'}
+                   'team': team_view([*analysts, 'critic'])}
+    if not macro_ready:
+        judge_input['missing'] = '뉴스·거시 자료가 없어 해당 분석가는 관망입니다.'
     progress.role('judge', 'running')
     judged = chat('judge', roles['judge'], judge_input, JUDGE_SCHEMA, config['temperature'])
     progress.role('judge', 'done')
@@ -358,21 +415,29 @@ def analyze(snapshot, config=None):
     horizons = {}
     for h, (label, frames, _) in HORIZONS.items():
         agents = []
-        for role in ('technical', 'derivatives', 'critic'):
+        for role in (*analysts, 'critic'):
             out, check = outputs[role][h], checks[role][h]
             agent = {'id': role, 'name': ROLES[role], 'role': ROLE_LABELS[role], 'verdict': effective(role, h),
                      'summary': out['summary'], 'counter': out['counter'], 'invalidation': out['invalidation'],
                      'evidence': [evidence_text(i, c) for i, c in zip(out['evidence'], check['checks'])],
                      'model': roles[role], 'sources': sources, 'verification': {**check, 'originalVerdict': out['verdict']}}
+            if role == 'macro':
+                cited = [news[i] for i in dict.fromkeys(out['news'])]
+                agent['sources'] = [{'title': macro_sources_title(macro), 'url': None, 'asOf': stamp},
+                                    *({'title': f"{n['publisher']} · {n['title']}"[:200], 'url': n['url'],
+                                       'asOf': n['date'] + 'T00:00:00+00:00'} for n in cited)]
+                agent['news'] = [n['id'] for n in cited]
             agents.append(agent)
             if check['failed']:
                 warnings.append(f"{ROLES[role]}({label}): 인용 수치 {len(check['failed'])}개 불일치로 관망 처리했습니다.")
             if check['numbersInText']:
                 warnings.append(f'{ROLES[role]}({label}): 문장에 검증하지 않은 숫자가 있습니다.')
-        agents.insert(2, {'id': 'macro', 'name': '뉴스·거시 분석가', 'role': '자료 미연결', 'verdict': 'wait',
-                          'summary': '뉴스·거시 자료가 없어 판정을 보류합니다.', 'evidence': ['뉴스와 경제 일정은 수집하지 않았습니다.'],
-                          'counter': '외부 이벤트가 기술적 해석을 바꿀 수 있습니다.', 'invalidation': '시각과 출처가 검증된 자료를 연결한 뒤 재분석합니다.',
-                          'model': '미실행 · 자료 부족', 'sources': [{'title': '뉴스·거시 자료 미제공', 'url': None, 'asOf': stamp}]})
+        if not macro_ready:
+            reason = macro.get('error') or ('models.json에 macro 모델이 없습니다.' if 'macro' not in roles else 'OpenBB 자료가 없습니다.')
+            agents.insert(2, {'id': 'macro', 'name': '뉴스·거시 분석가', 'role': '자료 미연결', 'verdict': 'wait',
+                              'summary': '뉴스·거시 자료가 없어 판정을 보류합니다.', 'evidence': [reason],
+                              'counter': '외부 이벤트가 기술적 해석을 바꿀 수 있습니다.', 'invalidation': '시각과 출처가 검증된 자료를 연결한 뒤 재분석합니다.',
+                              'model': '미실행 · 자료 부족', 'sources': [{'title': '뉴스·거시 자료 미제공', 'url': None, 'asOf': stamp}]})
         synthesis = judged[h]
         verdict = synthesis['verdict']
         # The judge may only side with a verdict some verified team member actually holds.

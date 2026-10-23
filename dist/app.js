@@ -50,7 +50,8 @@ $('#integrations').innerHTML=[
  ['Binance API','시세·마크 가격·펀딩·미결제약정·마감 캔들 수집. 분석할 때 펀딩·OI·롱숏·테이커 이력도 받습니다.','done'],
  ['LM Studio','역할별 로컬 모델 분석, 인용 수치 검증, 진행 상황 표시.','done'],
  ['판정 채점','보고서를 저장하고 1시간·4시간·1일 뒤 가격으로 판정 적중을 기록합니다. 외부 도구 없이 직접 구현합니다.','next'],
- ['OpenBB · FRED','뉴스·거시 분석가에게 금리·CPI 등 거시 지표, 발표 일정, 뉴스를 제공합니다. 뉴스 공급자는 연결 단계에서 정합니다.','planned'],
+ ['OpenBB','뉴스·거시 분석가에게 미국 국채 금리(Fed), VIX·S&P500(CBOE), 나스닥100·주요 경제 일정·코인 관련 뉴스(Nasdaq)를 제공합니다. API 키가 필요 없는 공급자만 씁니다.','done'],
+ ['FRED','CPI·PCE 등 발표 수치를 더 받으려면 무료 API 키가 필요합니다. 키를 넣는 기능은 아직 없습니다.','later'],
  ['Binance 과거 데이터','data.binance.vision에서 과거 캔들·펀딩·OI를 일괄로 받아 채점과 장기 지표에 씁니다.','planned'],
  ['NautilusTrader','규칙 기반 전략이 생기면 수수료·펀딩·슬리피지·체결 가정을 넣어 백테스트합니다.','later'],
  ['CCXT','Binance 직접 호출로 대체했습니다. 여러 거래소 비교나 주문이 필요해지면 다시 검토합니다.','dropped'],
@@ -63,13 +64,14 @@ const marks={
  microsoft:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9.5" height="9.5" fill="#f25022"/><rect x="12.5" y="2" width="9.5" height="9.5" fill="#7fba00"/><rect x="2" y="12.5" width="9.5" height="9.5" fill="#00a4ef"/><rect x="12.5" y="12.5" width="9.5" height="9.5" fill="#ffb900"/></svg>',
  mistral:'<svg viewBox="0 0 25 25" aria-hidden="true">'+[['#ffd800',[0,4]],['#ffaf00',[0,1,3,4]],['#ff8205',[0,1,2,3,4]],['#fa500f',[0,2,4]],['#e10500',[0,4]]].map(([c,cols],row)=>cols.map(x=>`<rect x="${x*5}" y="${row*5}" width="5" height="5" fill="${c}"/>`).join('')).join('')+'</svg>',
  gemma:'<svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="gemma-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4285f4"/><stop offset="1" stop-color="#9b72cb"/></linearGradient></defs><path d="M12 1C12 7 17 12 23 12C17 12 12 17 12 23C12 17 7 12 1 12C7 12 12 7 12 1Z" fill="url(#gemma-g)"/></svg>',
- qwen:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7z" fill="none" stroke="#615ced" stroke-width="2.2"/><path d="M12 7.5a4.5 4.5 0 1 0 2.9 7.95L17 17.5" fill="none" stroke="#615ced" stroke-width="2.2" stroke-linecap="round"/></svg>'
+ qwen:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7z" fill="none" stroke="#615ced" stroke-width="2.2"/><path d="M12 7.5a4.5 4.5 0 1 0 2.9 7.95L17 17.5" fill="none" stroke="#615ced" stroke-width="2.2" stroke-linecap="round"/></svg>',
+ exaone:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10.5" fill="#a50034"/><text x="12" y="15.6" text-anchor="middle" font-size="9.5" font-weight="700" fill="#fff" font-family="Segoe UI,Arial,sans-serif">EX</text></svg>'
 };
-function markFor(model){const m=String(model).toLowerCase();const key=m.includes('mistral')?'mistral':m.includes('phi')||m.includes('microsoft')?'microsoft':m.includes('gemma')||m.includes('google')?'gemma':m.includes('qwen')?'qwen':null;return key?marks[key]:`<span class="initials">${esc(m.split('/').pop().slice(0,2).toUpperCase())}</span>`}
+function markFor(model){const m=String(model).toLowerCase();const key=m.includes('mistral')?'mistral':m.includes('phi')||m.includes('microsoft')?'microsoft':m.includes('gemma')||m.includes('google')?'gemma':m.includes('qwen')?'qwen':m.includes('exaone')?'exaone':null;return key?marks[key]:`<span class="initials">${esc(m.split('/').pop().slice(0,2).toUpperCase())}</span>`}
 const seconds=ms=>{const s=Math.max(0,Math.round(ms/1000));return s<60?s+'초':`${Math.floor(s/60)}분${s%60?` ${s%60}초`:''}`};
 let progress=null,progressAt=0,progressTimer=null,tickTimer=null,ownRun=false;
 function roleProgress(r){
- if(r.status==='done'||r.status==='failed')return 1;
+ if(r.status==='done'||r.status==='failed'||r.status==='skipped')return 1;
  if(r.status!=='running')return 0;
  // Estimated from this model's last duration; held below full until the server reports done.
  return Math.min(.95,(r.elapsedMs+Date.now()-progressAt)/Math.max(r.expectedMs,1000));
@@ -77,6 +79,7 @@ function roleProgress(r){
 function roleText(r){
  if(r.status==='done')return '완료 · '+seconds(r.durationMs);
  if(r.status==='failed')return '실패 · '+seconds(r.durationMs||0);
+ if(r.status==='skipped')return '자료 없음 · 건너뜀';
  if(r.status==='running')return `분석 중 · ${seconds(r.elapsedMs+Date.now()-progressAt)} / 예상 ${seconds(r.expectedMs)}`;
  return '대기';
 }

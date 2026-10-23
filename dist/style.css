@@ -288,11 +288,12 @@ body.sidebar-collapsed main { margin-left:0; }
 #llm-status { color:var(--accent); overflow-wrap:anywhere; }
 
 /* Team progress: a conic-gradient fills each border clockwise from 12 o'clock. */
-.team-progress { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:16px; }
+.team-progress { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin-top:16px; }
 .team-progress[hidden] { display:none; }
 .role-card { --p:0; --fill:var(--accent); border-radius:16px; padding:2px; background:conic-gradient(var(--fill) calc(var(--p) * 360deg), var(--line) 0); }
 .role-card.done { --fill:var(--green); }
 .role-card.failed { --fill:var(--red); }
+.role-card.skipped { --fill:var(--line); opacity:.75; }
 .role-inner { background:var(--panel); border-radius:14px; padding:14px; display:flex; gap:12px; align-items:center; height:100%; }
 .role-ring { flex:none; width:52px; height:52px; border-radius:50%; padding:3px; background:conic-gradient(var(--fill) calc(var(--p) * 360deg), var(--line) 0); }
 .role-logo { width:100%; height:100%; border-radius:50%; background:var(--panel); display:grid; place-items:center; }
@@ -308,5 +309,4 @@ body.sidebar-collapsed main { margin-left:0; }
 .role-card.pending { opacity:.75; }
 #llm-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
 #llm-load { padding:7px 12px; }
-@media(max-width:1050px) { .team-progress { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:430px) { .team-progress { grid-template-columns:1fr; } }

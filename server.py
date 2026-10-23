@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from market import Collector, MarketError
 import local_llm
+import macro
 
 DIST = Path(__file__).resolve().parent / 'dist'
 ASSETS = { '/' + p.name for p in DIST.iterdir() if p.is_file() and p.suffix in ('.html', '.js', '.css') }
@@ -96,6 +97,12 @@ class Handler(SimpleHTTPRequestHandler):
                 missing = ', '.join(f"{r['name']}({r['model']})" for r in state['roles'] if not r['available'])
                 raise local_llm.AnalysisError(f'LM Studio에서 찾을 수 없는 모델: {missing}. 모델을 설치하거나 models.json을 수정하세요.')
             snapshot = {**collector.collect(payload['symbol']), 'derivatives': collector.derivatives(payload['symbol'])}
+            if 'macro' in config['roles']:
+                try:
+                    snapshot['macro'] = macro.collect(payload['symbol'], snapshot['serverTime'])
+                except macro.MacroUnavailable as exc:
+                    # Macro context is optional: the rest of the team still runs and the seat reports why.
+                    snapshot['macro'] = {'error': str(exc)}
             result = local_llm.analyze(snapshot, config)
             local_llm.progress.finish(report=result)
             return self.json_response(200, result)
