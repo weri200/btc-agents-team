@@ -3,11 +3,53 @@
   const host = document.getElementById('market-chart');
   const symbol = document.getElementById('chart-symbol');
   const interval = document.getElementById('chart-interval');
+  const studyBox = document.getElementById('chart-studies');
+  const studyCount = document.getElementById('chart-study-count');
+  // TradingView built-in studies offered as presets. More can be added from the chart's own indicator menu,
+  // but only these are remembered between visits.
+  const STUDIES = [
+    ['STD;SMA', '이동평균 (SMA)'], ['STD;EMA', '지수이동평균 (EMA)'], ['STD;Bollinger_Bands', '볼린저 밴드'],
+    ['STD;VWAP', 'VWAP'], ['STD;RSI', 'RSI'], ['STD;MACD', 'MACD'], ['STD;Stochastic_RSI', '스토캐스틱 RSI'],
+    ['STD;Average_True_Range', 'ATR'], ['STD;Ichimoku_Cloud', '일목균형표'],
+  ];
+  // Oscillators open their own pane under the price; the chart grows so the price pane keeps its height.
+  const PANE_STUDIES = new Set(['STD;RSI', 'STD;MACD', 'STD;Stochastic_RSI', 'STD;Average_True_Range']);
+  const KEY = 'futures-desk-studies';
+  const DEFAULT = [];
+  let selected, renderedTheme;
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+    selected = Array.isArray(saved) ? saved.filter(id => STUDIES.some(([s]) => s === id)) : DEFAULT;
+  } catch { selected = DEFAULT; }
+
+  function renderStudies() {
+    studyBox.replaceChildren(...STUDIES.map(([id, name]) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.value = id;
+      input.checked = selected.includes(id);
+      input.onchange = () => {
+        selected = STUDIES.map(([s]) => s).filter(s => s === id ? input.checked : selected.includes(s));
+        try { localStorage.setItem(KEY, JSON.stringify(selected)); } catch {}
+        studyCount.textContent = selected.length ? `지표 ${selected.length}` : '지표';
+        renderChart();
+      };
+      label.append(input, document.createTextNode(name));
+      return label;
+    }));
+    studyCount.textContent = selected.length ? `지표 ${selected.length}` : '지표';
+  }
+
   function renderChart() {
+    renderedTheme = document.documentElement.dataset.theme;
+    host.style.setProperty('--study-panes', selected.filter(id => PANE_STUDIES.has(id)).length);
     const ticker = `BINANCE:${symbol.value}.P`;
     const container = document.createElement('div');
     container.className = 'tradingview-widget-container';
     const widget = document.createElement('div');
+    // The widget sizes its iframe from this element; without an explicit height the chart
+    // canvas and the iframe disagree, which cut off the price and time axes.
     widget.className = 'tradingview-widget-container__widget';
     const credit = document.createElement('div');
     credit.className = 'tradingview-widget-copyright';
@@ -23,18 +65,39 @@
     script.async = true;
     script.textContent = JSON.stringify({
       autosize: true, symbol: ticker, interval: interval.value,
-      timezone: 'Asia/Seoul', theme: document.documentElement.dataset.theme,
+      timezone: 'Asia/Seoul', theme: renderedTheme,
       style: '1', locale: 'kr', allow_symbol_change: false,
-      hide_side_toolbar: true, hide_top_toolbar: true,
+      // The top toolbar carries TradingView's own indicator menu for anything not in the presets.
+      hide_side_toolbar: true, hide_top_toolbar: false, save_image: false,
       hide_volume: false, calendar: false, withdateranges: true,
+      studies: selected,
       support_host: 'https://www.tradingview.com'
     });
     script.onerror = () => { widget.textContent = '차트를 불러오지 못했습니다. 네트워크 연결을 확인하거나 아래 링크를 이용하세요.'; };
     container.append(widget, credit, script);
     host.replaceChildren(container);
   }
+
+  // Open the menu toward whichever side has room, since the button moves as the controls wrap.
+  const menuHost = studyBox.closest('details');
+  menuHost.addEventListener('toggle', () => {
+    if (!menuHost.open) return;
+    // Prefer ending at the button's right edge (stays over the chart); flip only when that runs off the left.
+    menuHost.classList.toggle('align-left', menuHost.getBoundingClientRect().right - 260 < 16);
+  });
   symbol.onchange = interval.onchange = renderChart;
   document.getElementById('chart-retry').onclick = renderChart;
-  new MutationObserver(renderChart).observe(document.documentElement, {attributes:true, attributeFilter:['data-theme']});
+  document.getElementById('chart-studies-reset').onclick = () => {
+    selected = [];
+    try { localStorage.setItem(KEY, '[]'); } catch {}
+    renderStudies();
+    renderChart();
+  };
+  // theme.js re-applies the same theme on DOMContentLoaded; rebuilding then removed the first iframe mid-load,
+  // leaving TradingView bound to a dead frame and the chart mis-sized. Rebuild only on a real change.
+  new MutationObserver(() => {
+    if (document.documentElement.dataset.theme !== renderedTheme) renderChart();
+  }).observe(document.documentElement, {attributes:true, attributeFilter:['data-theme']});
+  renderStudies();
   renderChart();
 })();
