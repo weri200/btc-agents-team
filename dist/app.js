@@ -17,14 +17,14 @@ function saveHistory(){try{localStorage.setItem('futures-desk-v1',JSON.stringify
 function page(name){document.querySelectorAll('.page').forEach(p=>p.hidden=p.id!==name);document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.page===name));$('#page-name').textContent={desk:'분석 데스크',history:'판단 이력',system:'연결 및 구성'}[name];if(name==='history')renderHistory()}
 function opinionContext(){
  const mismatch=$('#chart-symbol').value!==report.symbol;
- $('#opinion-context').textContent=`${report.symbol} · ${report.mode==='demo'?'데모 의견 · 실제 수집값에서 생성되지 않음':'가져온 보고서 · 실시간 분석 아님'}${mismatch?' · 차트 종목과 다릅니다.':''}`;
+ $('#opinion-context').textContent=`${report.symbol} · ${report.mode==='demo'?'데모 의견 · 실제 수집값에서 생성되지 않음':(report.origin==='local-llm'?'로컬 모델 보고서 · 생성 시점의 스냅샷':'가져온 보고서 · 실시간 분석 아님')}${mismatch?' · 차트 종목과 다릅니다.':''}`;
 }
 $('#chart-symbol').addEventListener('change',opinionContext);
 function render(){
  opinionContext();
- const isDemo=report.mode==='demo';$('#notice-title').textContent=isDemo?'AI 분석은 데모입니다. 실제 수집 데이터와 연결되지 않습니다.':'가져온 분석 보고서 — 내용의 정확성은 검증되지 않았습니다.';
- $('#notice-text').textContent=isDemo?' 예시 판정으로 화면을 살펴보세요. GPT·로컬 모델과 네 라이브러리는 아직 연결되지 않았습니다.':' 실시간 연결이 아닌 파일의 결과입니다. 데이터 기준 시각과 각 출처를 확인하세요.';
- $('#source-badge').textContent=isDemo?'예시 데이터':'가져온 보고서';$('#report-time').textContent=(isDemo?'가상 기준 시각 · ':'보고서 기준 · ')+time(report.asOf);
+ const isDemo=report.mode==='demo';$('#notice-title').textContent=isDemo?'AI 분석은 데모입니다. 실제 수집 데이터와 연결되지 않습니다.':(report.origin==='local-llm'?'로컬 Qwen 분석 — 내용의 정확성은 검증되지 않았습니다.':'가져온 분석 보고서 — 내용의 정확성은 검증되지 않았습니다.');
+ $('#notice-text').textContent=isDemo?' 예시 판정으로 화면을 살펴보세요. Qwen으로 분석 버튼을 누르면 실제 수집값으로 로컬 분석을 실행합니다.':(report.origin==='local-llm'?' 동일 모델의 역할별 해석이며 독립된 전문가 합의가 아닙니다. '+(Array.isArray(report.warnings)?report.warnings.join(' '):''):' 실시간 연결이 아닌 파일의 결과입니다. 데이터 기준 시각과 각 출처를 확인하세요.');
+ $('#source-badge').textContent=isDemo?'예시 데이터':(report.origin==='local-llm'?'로컬 Qwen':'가져온 보고서');$('#report-time').textContent=(isDemo?'가상 기준 시각 · ':'보고서 기준 · ')+time(report.asOf);
  if(!Array.from($('#symbol').options).some(o=>o.value===report.symbol))$('#symbol').add(new Option(report.symbol,report.symbol));$('#symbol').value=report.symbol;
  $('.coin').textContent=report.symbol.startsWith('BTC')?'₿':report.symbol.startsWith('ETH')?'Ξ':'◈';
  $('#horizons').innerHTML=Object.entries(report.horizons).filter(([k])=>['intraday','swing'].includes(k)).map(([key,h])=>{const c=counts(h);return `<article class="horizon-card ${key} ${key===horizon?'selected':''}"><div class="horizon-top"><h3>${esc(h.label)}</h3><span>${esc(h.timeframes)} 봉</span></div><div class="horizon-verdict"><strong class="${h.verdict}">${labels[h.verdict]}</strong><span class="tag neutral">${isDemo?'예시 종합 판정':'보고서 종합 판정'}</span></div><p>${esc(h.summary)}</p><div class="horizon-bottom"><span>롱 ${c.long} · 숏 ${c.short} · 관망 ${c.wait}</span><button class="text-btn" data-select="${key}">팀원 의견 보기 ↗</button></div></article>`}).join('');
@@ -35,7 +35,7 @@ function render(){
 }
 function detail(index){const a=report.horizons[horizon].agents[index];if(!a)return;$('#detail-content').innerHTML=`<div class="detail-title"><h2>${esc(a.name)}</h2><span class="tag ${a.verdict}">${labels[a.verdict]}</span></div><div class="detail-meta">${esc(report.symbol)} · ${esc(report.horizons[horizon].label)} · ${esc(a.model)}<br>${esc(time(report.asOf))} · 프롬프트 ${esc(report.promptVersion)}</div><p class="detail-copy">${esc(a.summary)}</p><div class="detail-label">판정을 뒷받침하는 근거</div><ul class="detail-list">${a.evidence.map(e=>`<li>${esc(e)}</li>`).join('')}</ul><div class="detail-label">반대 근거 · 다른 가능성</div><div class="detail-copy">${esc(a.counter)}</div><div class="detail-label">이 판단을 철회하는 조건</div><div class="detail-copy">${esc(a.invalidation)}</div><div class="detail-label">사용한 자료</div>${a.sources.map(s=>`<p class="detail-meta">${s.url?`<a class="source-link" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)} ↗</a>`:esc(s.title)}<br>자료 기준: ${esc(time(s.asOf))}</p>`).join('')}<p class="footnote">표시 내용은 검토 가능한 근거 요약입니다. 모델의 내부 사고 과정이나 검증된 수익 확률을 의미하지 않습니다.</p>`;$('#detail').showModal()}
 function download(r){const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=`futures-${r.symbol}-${r.mode}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function renderHistory(){$('#history-list').innerHTML=history.length?history.map((r,i)=>`<article class="history-entry"><div><b>${esc(r.symbol)}</b> <span class="tag neutral">${r.mode==='demo'?'가져온 예시':'가져온 분석'}</span><p>${esc(time(r.asOf))} · 단타 ${labels[r.horizons.intraday.verdict]} / 스윙 ${labels[r.horizons.swing.verdict]}</p></div><button class="btn" data-history="${i}">보고서 열기 ↗</button></article>`).join(''):'<div class="empty"><b>아직 가져온 보고서가 없습니다.</b>분석 데스크에서 JSON 보고서를 가져오면 이곳에 기록됩니다.<br>예시 화면을 보는 것만으로 실제 분석 이력이 만들어지지는 않습니다.</div>'}
+function renderHistory(){$('#history-list').innerHTML=history.length?history.map((r,i)=>`<article class="history-entry"><div><b>${esc(r.symbol)}</b> <span class="tag neutral">${r.mode==='demo'?'가져온 예시':(r.origin==='local-llm'?'로컬 분석':'가져온 분석')}</span><p>${esc(time(r.asOf))} · 단타 ${labels[r.horizons.intraday.verdict]} / 스윙 ${labels[r.horizons.swing.verdict]}</p></div><button class="btn" data-history="${i}">보고서 열기 ↗</button></article>`).join(''):'<div class="empty"><b>아직 가져온 보고서가 없습니다.</b>분석 데스크에서 JSON 보고서를 가져오면 이곳에 기록됩니다.<br>예시 화면을 보는 것만으로 실제 분석 이력이 만들어지지는 않습니다.</div>'}
 document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>page(b.dataset.page));
 document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.select||b.dataset.horizon){horizon=b.dataset.select||b.dataset.horizon;render();if(b.dataset.select)$('#agents').scrollIntoView({block:'start'})}if(b.dataset.agent!==undefined)detail(Number(b.dataset.agent));if(b.dataset.history!==undefined){report=history[Number(b.dataset.history)];render();page('desk')}});
 $('#symbol').onchange=()=>{report=demo($('#symbol').value);render();toast('보고서의 데모 종목을 변경했습니다. 실제 수집 종목은 차트에서 선택하세요.')};
@@ -45,3 +45,17 @@ $('#file').onchange=async()=>{const f=$('#file').files[0];if(!f)return;try{if(f.
 $('#clear-history').onclick=()=>{if(!history.length){toast('지울 이력이 없습니다.');return}if(confirm('이 브라우저에 보관된 보고서 이력을 지울까요? 원본 파일은 유지됩니다.')){history=[];saveHistory();renderHistory()}};
 $('#integrations').innerHTML=[['Binance API','공개 시세·펀딩비·미결제약정·마감 캔들 수집'],['OpenBB','거시·뉴스 등 배경 자료 수집'],['CCXT','Binance 선물 시세·펀딩·수급 자료 수집'],['TradingAgents','팀원별 분석과 찬반 검토, 종합 보고서 생성'],['NautilusTrader','백테스트와 비용·체결 가정 검증']].map(([n,d])=>`<div class="integration"><b>${n}</b><p>${d}</p><span class="tag neutral">${n==='Binance API'?'구현됨':'미연결'}</span></div>`).join('');
 render();
+
+$('#analyze').onclick=async()=>{
+ const button=$('#analyze');if(button.disabled)return;
+ const symbol=$('#chart-symbol').value;button.disabled=true;button.textContent='분석 중…';
+ $('#llm-status').textContent=symbol+' · 시장 데이터를 수집하고 Qwen으로 분석합니다. 완료까지 수 분 걸릴 수 있습니다.';
+ try{
+  const response=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol})});
+  const data=await response.json();if(!response.ok)throw new Error(data.error||'분석 요청 실패');
+  const next=validate(data);if(next.symbol!==symbol||next.mode!=='analysis')throw new Error('분석 응답 종목 또는 유형이 다릅니다.');
+  report=next;history=[next,...history.filter(x=>x.id!==next.id)].slice(0,20);saveHistory();render();
+  $('#llm-status').textContent=symbol+' · 로컬 분석 완료 · 기준 '+time(next.asOf)+' · 보고서는 자동 갱신되지 않습니다.';
+ }catch(e){$('#llm-status').textContent='분석 실패: '+e.message+' 기존 보고서를 유지했습니다.';}
+ finally{button.disabled=false;button.textContent='Qwen으로 분석';}
+};

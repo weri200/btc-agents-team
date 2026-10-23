@@ -177,6 +177,31 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 502)
         self.assertEqual(json.loads(body)['error'], 'offline')
 
+    def post(self, body='{"symbol":"BTCUSDT"}', headers=None):
+        connection = HTTPConnection('127.0.0.1', self.http.server_port, timeout=5)
+        connection.request('POST', '/api/analyze', body, {'Content-Type': 'application/json', **(headers or {})})
+        response = connection.getresponse()
+        result = response.status, response.read()
+        connection.close()
+        return result
+
+    def test_local_analysis_guards(self):
+        self.assertEqual(self.post(headers={'Origin': 'https://other.example'})[0], 403)
+        self.assertEqual(self.post(headers={'Content-Type': 'text/plain'})[0], 400)
+        self.assertEqual(self.post('{"symbol":"BAD"}')[0], 400)
+        self.assertEqual(self.post('null')[0], 400)
+        with server.local_llm.lock:
+            self.assertEqual(self.post()[0], 409)
+
+    def test_local_analysis_success_and_failure(self):
+        with patch.object(server.local_llm, 'status', return_value={'available': True}), patch.object(server.collector, 'collect', return_value={}), patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}):
+            status, body = self.post()
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)['id'], 'test')
+        with patch.object(server.local_llm, 'status', side_effect=server.local_llm.AnalysisError('offline')):
+            self.assertEqual(self.post()[0], 502)
+        self.assertFalse(server.local_llm.lock.locked())
+
 
 if __name__ == '__main__':
     unittest.main()

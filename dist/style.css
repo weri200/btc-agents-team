@@ -281,3 +281,6 @@ html[data-theme="dark"] {
 .menu-toggle:hover { background:var(--hover); }
 body.sidebar-collapsed main { margin-left:0; }
 @media(max-width:600px) { header { height:auto; min-height:64px; flex-wrap:wrap; gap:10px; padding-top:10px; padding-bottom:10px; } .header-right { margin-left:auto; } .header-left { gap:8px; } }
+
+.llm-panel { margin-bottom:24px; }
+#llm-status { color:var(--accent); overflow-wrap:anywhere; }
