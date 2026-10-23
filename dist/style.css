@@ -102,9 +102,11 @@ h3{margin:0;font-size:18px;font-weight:600}
 .setting-row{display:flex;justify-content:space-between;gap:12px;padding:17px 0;border-bottom:1px solid var(--line);font-size:12px}
 .setting-row span{color:var(--muted)}
 .integration-panel{margin:20px 0}
-.integration{display:grid;grid-template-columns:150px 1fr 65px;gap:16px;align-items:center;border-bottom:1px solid var(--line);padding:18px 0;font-size:12px}
+.integration{display:grid;grid-template-columns:150px 1fr 76px;gap:16px;align-items:center;border-bottom:1px solid var(--line);padding:18px 0;font-size:12px}
 .integration:last-child{border:0}
 .integration p{margin:0;color:var(--muted)}
+.integration .tag{justify-self:end}
+.integration.dropped b,.integration.dropped p{opacity:.6}
 .steps{padding-left:21px;color:var(--copy);font-size:12px;line-height:2.3;margin:18px 0}
 .panel>h2{margin-bottom:12px}
 dialog{background:var(--panel);border:1px solid var(--line);border-radius:14px;color:var(--text);width:min(640px,calc(100% - 30px));max-height:85vh;padding:28px;overflow:auto}
@@ -151,7 +153,7 @@ header{height:54px}
 .horizon-grid,.bottom-grid,.system-grid{grid-template-columns:1fr}
 .toolbar{align-items:flex-start;flex-direction:column}
 .meta{flex-wrap:wrap}
-.integration{grid-template-columns:95px 1fr 60px;gap:8px}
+.integration{grid-template-columns:95px 1fr 72px;gap:8px}
 .notice{font-size:12px}
 h1{font-size:25px}
 }
@@ -286,11 +288,12 @@ body.sidebar-collapsed main { margin-left:0; }
 #llm-status { color:var(--accent); overflow-wrap:anywhere; }
 
 /* Team progress: a conic-gradient fills each border clockwise from 12 o'clock. */
-.team-progress { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:16px; }
+.team-progress { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin-top:16px; }
 .team-progress[hidden] { display:none; }
 .role-card { --p:0; --fill:var(--accent); border-radius:16px; padding:2px; background:conic-gradient(var(--fill) calc(var(--p) * 360deg), var(--line) 0); }
 .role-card.done { --fill:var(--green); }
 .role-card.failed { --fill:var(--red); }
+.role-card.skipped { --fill:var(--line); opacity:.75; }
 .role-inner { background:var(--panel); border-radius:14px; padding:14px; display:flex; gap:12px; align-items:center; height:100%; }
 .role-ring { flex:none; width:52px; height:52px; border-radius:50%; padding:3px; background:conic-gradient(var(--fill) calc(var(--p) * 360deg), var(--line) 0); }
 .role-logo { width:100%; height:100%; border-radius:50%; background:var(--panel); display:grid; place-items:center; }
@@ -306,5 +309,4 @@ body.sidebar-collapsed main { margin-left:0; }
 .role-card.pending { opacity:.75; }
 #llm-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
 #llm-load { padding:7px 12px; }
-@media(max-width:1050px) { .team-progress { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:430px) { .team-progress { grid-template-columns:1fr; } }

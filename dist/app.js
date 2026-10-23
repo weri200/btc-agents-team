@@ -44,7 +44,19 @@ $('#close-detail').onclick=()=>$('#detail').close();$('#detail').onclick=e=>{if(
 $('#export').onclick=()=>download(report);$('#sample').onclick=()=>download(demo());$('#import').onclick=()=>$('#file').click();
 $('#file').onchange=async()=>{const f=$('#file').files[0];if(!f)return;try{if(f.size>500000)throw new Error('500KB 이하의 보고서만 가져올 수 있습니다.');const r=validate(JSON.parse(await f.text()));const next=[r,...history.filter(x=>x.id!==r.id)].slice(0,20);report=r;history=next;const stored=saveHistory();render();page('desk');if(stored)toast('보고서를 가져왔습니다. 출처와 기준 시각을 확인하세요.')}catch(e){toast('가져오기 실패: '+e.message)}finally{$('#file').value=''}};
 $('#clear-history').onclick=()=>{if(!history.length){toast('지울 이력이 없습니다.');return}if(confirm('이 브라우저에 보관된 보고서 이력을 지울까요? 원본 파일은 유지됩니다.')){history=[];saveHistory();renderHistory()}};
-$('#integrations').innerHTML=[['Binance API','공개 시세·펀딩비·미결제약정·마감 캔들 수집'],['LM Studio','역할별 로컬 모델 분석 · 인용 수치 검증'],['OpenBB','거시·뉴스 등 배경 자료 수집'],['CCXT','Binance 선물 시세·펀딩·수급 자료 수집'],['TradingAgents','팀원별 분석과 찬반 검토, 종합 보고서 생성'],['NautilusTrader','백테스트와 비용·체결 가정 검증']].map(([n,d])=>`<div class="integration"><b>${n}</b><p>${d}</p><span class="tag neutral">${['Binance API','LM Studio'].includes(n)?'구현됨':'미연결'}</span></div>`).join('');
+// Status reflects what is actually wired up; "제외" tools were replaced by direct implementations.
+const toolStatus={done:['구현됨','long'],next:['다음 단계','wait'],planned:['예정','neutral'],later:['보류','neutral'],dropped:['제외','neutral']};
+$('#integrations').innerHTML=[
+ ['Binance API','시세·마크 가격·펀딩·미결제약정·마감 캔들 수집. 분석할 때 펀딩·OI·롱숏·테이커 이력도 받습니다.','done'],
+ ['LM Studio','역할별 로컬 모델 분석, 인용 수치 검증, 진행 상황 표시.','done'],
+ ['판정 채점','보고서를 저장하고 1시간·4시간·1일 뒤 가격으로 판정 적중을 기록합니다. 외부 도구 없이 직접 구현합니다.','next'],
+ ['OpenBB','뉴스·거시 분석가에게 미국 국채 금리(Fed), VIX·S&P500(CBOE), 나스닥100·주요 경제 일정·코인 관련 뉴스(Nasdaq)를 제공합니다. API 키가 필요 없는 공급자만 씁니다.','done'],
+ ['FRED','CPI·PCE 등 발표 수치를 더 받으려면 무료 API 키가 필요합니다. 키를 넣는 기능은 아직 없습니다.','later'],
+ ['Binance 과거 데이터','data.binance.vision에서 과거 캔들·펀딩·OI를 일괄로 받아 채점과 장기 지표에 씁니다.','planned'],
+ ['NautilusTrader','규칙 기반 전략이 생기면 수수료·펀딩·슬리피지·체결 가정을 넣어 백테스트합니다.','later'],
+ ['CCXT','Binance 직접 호출로 대체했습니다. 여러 거래소 비교나 주문이 필요해지면 다시 검토합니다.','dropped'],
+ ['TradingAgents','팀 분석은 직접 구현했습니다. 역할 구성과 토론 방식만 참고합니다.','dropped']
+].map(([n,d,s])=>`<div class="integration ${s}"><b>${n}</b><p>${d}</p><span class="tag ${toolStatus[s][1]}">${toolStatus[s][0]}</span></div>`).join('');
 render();
 
 // Simplified provider marks for the progress cards; not official logo files.
@@ -52,13 +64,14 @@ const marks={
  microsoft:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9.5" height="9.5" fill="#f25022"/><rect x="12.5" y="2" width="9.5" height="9.5" fill="#7fba00"/><rect x="2" y="12.5" width="9.5" height="9.5" fill="#00a4ef"/><rect x="12.5" y="12.5" width="9.5" height="9.5" fill="#ffb900"/></svg>',
  mistral:'<svg viewBox="0 0 25 25" aria-hidden="true">'+[['#ffd800',[0,4]],['#ffaf00',[0,1,3,4]],['#ff8205',[0,1,2,3,4]],['#fa500f',[0,2,4]],['#e10500',[0,4]]].map(([c,cols],row)=>cols.map(x=>`<rect x="${x*5}" y="${row*5}" width="5" height="5" fill="${c}"/>`).join('')).join('')+'</svg>',
  gemma:'<svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="gemma-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4285f4"/><stop offset="1" stop-color="#9b72cb"/></linearGradient></defs><path d="M12 1C12 7 17 12 23 12C17 12 12 17 12 23C12 17 7 12 1 12C7 12 12 7 12 1Z" fill="url(#gemma-g)"/></svg>',
- qwen:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7z" fill="none" stroke="#615ced" stroke-width="2.2"/><path d="M12 7.5a4.5 4.5 0 1 0 2.9 7.95L17 17.5" fill="none" stroke="#615ced" stroke-width="2.2" stroke-linecap="round"/></svg>'
+ qwen:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7z" fill="none" stroke="#615ced" stroke-width="2.2"/><path d="M12 7.5a4.5 4.5 0 1 0 2.9 7.95L17 17.5" fill="none" stroke="#615ced" stroke-width="2.2" stroke-linecap="round"/></svg>',
+ exaone:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10.5" fill="#a50034"/><text x="12" y="15.6" text-anchor="middle" font-size="9.5" font-weight="700" fill="#fff" font-family="Segoe UI,Arial,sans-serif">EX</text></svg>'
 };
-function markFor(model){const m=String(model).toLowerCase();const key=m.includes('mistral')?'mistral':m.includes('phi')||m.includes('microsoft')?'microsoft':m.includes('gemma')||m.includes('google')?'gemma':m.includes('qwen')?'qwen':null;return key?marks[key]:`<span class="initials">${esc(m.split('/').pop().slice(0,2).toUpperCase())}</span>`}
+function markFor(model){const m=String(model).toLowerCase();const key=m.includes('mistral')?'mistral':m.includes('phi')||m.includes('microsoft')?'microsoft':m.includes('gemma')||m.includes('google')?'gemma':m.includes('qwen')?'qwen':m.includes('exaone')?'exaone':null;return key?marks[key]:`<span class="initials">${esc(m.split('/').pop().slice(0,2).toUpperCase())}</span>`}
 const seconds=ms=>{const s=Math.max(0,Math.round(ms/1000));return s<60?s+'초':`${Math.floor(s/60)}분${s%60?` ${s%60}초`:''}`};
 let progress=null,progressAt=0,progressTimer=null,tickTimer=null,ownRun=false;
 function roleProgress(r){
- if(r.status==='done'||r.status==='failed')return 1;
+ if(r.status==='done'||r.status==='failed'||r.status==='skipped')return 1;
  if(r.status!=='running')return 0;
  // Estimated from this model's last duration; held below full until the server reports done.
  return Math.min(.95,(r.elapsedMs+Date.now()-progressAt)/Math.max(r.expectedMs,1000));
@@ -66,6 +79,7 @@ function roleProgress(r){
 function roleText(r){
  if(r.status==='done')return '완료 · '+seconds(r.durationMs);
  if(r.status==='failed')return '실패 · '+seconds(r.durationMs||0);
+ if(r.status==='skipped')return '자료 없음 · 건너뜀';
  if(r.status==='running')return `분석 중 · ${seconds(r.elapsedMs+Date.now()-progressAt)} / 예상 ${seconds(r.expectedMs)}`;
  return '대기';
 }

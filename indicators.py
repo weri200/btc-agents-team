@@ -173,4 +173,27 @@ def describe(facts, keys):
             lines.append(f"현재 펀딩비율 {value}%: {'롱이 숏에 지불' if value > 0 else '숏이 롱에 지불' if value < 0 else '0'}")
         elif name == 'premiumPct':
             lines.append(f"마크 가격은 인덱스보다 {abs(value)}% {'높음' if value > 0 else '낮음' if value < 0 else '같음'}")
+        elif frame == 'macro':
+            lines.append(describe_macro(name, value))
     return lines
+
+
+MACRO_NAMES = {'vix': 'VIX', 'spx': 'S&P500', 'ndx': '나스닥100', 'us2y': '미국 2년 금리', 'us10y': '미국 10년 금리'}
+
+
+def describe_macro(name, value):
+    direction = '상승' if value > 0 else '하락' if value < 0 else '변화 없음'
+    if name == 'vix':
+        level = '높음(25 이상)' if value >= 25 else '낮음(15 이하)' if value <= 15 else '보통(15~25)'
+        return f'VIX {value}: 변동성 경계 {level}'
+    if name == 'curve2s10sBp':
+        return f"미국 10년-2년 금리차 {value}bp: {'정상(10년이 높음)' if value > 0 else '역전(2년이 높음)' if value < 0 else '같음'}"
+    for prefix, label in MACRO_NAMES.items():
+        if name.startswith(prefix):
+            rest = name[len(prefix):]
+            if rest == 'Pct':
+                return f'{label} {value}%'
+            span = '1일' if '1d' in rest else '5일'
+            unit = 'bp' if rest.endswith('Bp') else '%'
+            return f'{label} {span} 변화 {value}{unit}: {direction}'
+    return f'{name} {value}'
