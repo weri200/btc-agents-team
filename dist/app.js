@@ -17,26 +17,33 @@ function saveHistory(){try{localStorage.setItem('futures-desk-v1',JSON.stringify
 function page(name){document.querySelectorAll('.page').forEach(p=>p.hidden=p.id!==name);document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.page===name));$('#page-name').textContent={desk:'분석 데스크',history:'판단 이력',system:'연결 및 구성'}[name];if(name==='history')renderHistory();if(name==='system')loadRoles()}
 function opinionContext(){
  const mismatch=$('#chart-symbol').value!==report.symbol;
- $('#opinion-context').textContent=`${report.symbol} · ${report.mode==='demo'?'데모 의견 · 실제 수집값에서 생성되지 않음':(report.origin==='local-llm'?'로컬 모델 보고서 · 생성 시점의 스냅샷':'가져온 보고서 · 실시간 분석 아님')}${mismatch?' · 차트 종목과 다릅니다.':''}`;
+ $('#opinion-context').textContent=`${report.symbol} · ${report.mode==='demo'?'분석 전 · 아직 결과가 없습니다':(report.origin==='local-llm'?'로컬 모델 보고서 · 생성 시점의 스냅샷':'가져온 보고서 · 실시간 분석 아님')}${mismatch?' · 차트 종목과 다릅니다.':''}`;
 }
 $('#chart-symbol').addEventListener('change',opinionContext);
 function render(){
  opinionContext();
- const isDemo=report.mode==='demo';$('#notice-title').textContent=isDemo?'AI 분석은 데모입니다. 실제 수집 데이터와 연결되지 않습니다.':(report.origin==='local-llm'?'로컬 모델팀 분석 — 인용 수치는 서버 지표와 대조했지만 해석의 정확성은 검증되지 않았습니다.':'가져온 분석 보고서 — 내용의 정확성은 검증되지 않았습니다.');
- $('#notice-text').textContent=isDemo?' 예시 판정으로 화면을 살펴보세요. 로컬 모델팀으로 분석 버튼을 누르면 실제 수집값으로 로컬 분석을 실행합니다.':(report.origin==='local-llm'?' 역할마다 지정한 로컬 모델이 판단하며, 인용 수치가 틀린 의견은 관망으로 바꿨습니다. '+(Array.isArray(report.warnings)?report.warnings.join(' '):''):' 실시간 연결이 아닌 파일의 결과입니다. 데이터 기준 시각과 각 출처를 확인하세요.');
- $('#source-badge').textContent=isDemo?'예시 데이터':(report.origin==='local-llm'?'로컬 모델팀':'가져온 보고서');$('#report-time').textContent=(isDemo?'가상 기준 시각 · ':'보고서 기준 · ')+time(report.asOf);
+ const isDemo=report.mode==='demo';$('#notice-title').textContent=isDemo?'아직 AI 분석 결과가 없습니다.':(report.origin==='local-llm'?'로컬 모델팀 분석 — 인용 수치는 서버 지표와 대조했지만 해석의 정확성은 검증되지 않았습니다.':'가져온 분석 보고서 — 내용의 정확성은 검증되지 않았습니다.');
+ $('#notice-text').textContent=isDemo?' 서버를 켠 뒤 처음 열면 실제 수집값으로 로컬 분석을 자동으로 시작하고, 그 뒤에는 서버의 마지막 분석 결과를 불러옵니다.':(report.origin==='local-llm'?' 역할마다 지정한 로컬 모델이 판단하며, 인용 수치가 틀린 의견은 관망으로 바꿨습니다. '+(Array.isArray(report.warnings)?report.warnings.join(' '):''):' 실시간 연결이 아닌 파일의 결과입니다. 데이터 기준 시각과 각 출처를 확인하세요.');
+ $('#source-badge').textContent=isDemo?'분석 전':(report.origin==='local-llm'?'로컬 모델팀':'가져온 보고서');$('#report-time').textContent=isDemo?'':'보고서 기준 · '+time(report.asOf);
  if(!Array.from($('#symbol').options).some(o=>o.value===report.symbol))$('#symbol').add(new Option(report.symbol,report.symbol));$('#symbol').value=report.symbol;
  $('.coin').textContent=report.symbol.startsWith('BTC')?'₿':report.symbol.startsWith('ETH')?'Ξ':'◈';
- $('#horizons').innerHTML=Object.entries(report.horizons).filter(([k])=>['intraday','swing'].includes(k)).map(([key,h])=>{const c=counts(h);return `<article class="horizon-card ${key} ${key===horizon?'selected':''}"><div class="horizon-top"><h3>${esc(h.label)}</h3><span>${esc(h.timeframes)} 봉</span></div><div class="horizon-verdict"><strong class="${h.verdict}">${labels[h.verdict]}</strong><span class="tag neutral">${isDemo?'예시 종합 판정':'보고서 종합 판정'}</span></div><p>${esc(h.summary)}</p><div class="horizon-bottom"><span>롱 ${c.long} · 숏 ${c.short} · 관망 ${c.wait}</span><button class="text-btn" data-select="${key}">팀원 의견 보기 ↗</button></div></article>`}).join('');
  document.querySelectorAll('[data-horizon]').forEach(b=>{b.classList.toggle('selected',b.dataset.horizon===horizon);b.setAttribute('aria-pressed',b.dataset.horizon===horizon)});
+ // Demo opinions are made-up text; show nothing until a real analysis exists.
+ if(isDemo){
+  $('#horizons').innerHTML='<div class="empty horizons-empty"><b>아직 분석 결과가 없습니다.</b>로컬 모델팀 분석이 끝나면 단타·스윙 종합 의견이 여기에 표시됩니다.</div>';
+  $('#agent-count').textContent='00';
+  $('#agents').innerHTML='<div class="empty agents-empty"><b>아직 분석 결과가 없습니다.</b>로컬 모델팀 분석이 끝나면 팀원별 판정이 여기에 표시됩니다.</div>';
+  return;
+ }
+ $('#horizons').innerHTML=Object.entries(report.horizons).filter(([k])=>['intraday','swing'].includes(k)).map(([key,h])=>{const c=counts(h);return `<article class="horizon-card ${key} ${key===horizon?'selected':''}"><div class="horizon-top"><h3>${esc(h.label)}</h3><span>${esc(h.timeframes)} 봉</span></div><div class="horizon-verdict"><strong class="${h.verdict}">${labels[h.verdict]}</strong><span class="tag neutral">보고서 종합 판정</span></div><p>${esc(h.summary)}</p><div class="horizon-bottom"><span>롱 ${c.long} · 숏 ${c.short} · 관망 ${c.wait}</span><button class="text-btn" data-select="${key}">팀원 의견 보기 ↗</button></div></article>`}).join('');
  const h=report.horizons[horizon];$('#agent-count').textContent=String(h.agents.length).padStart(2,'0');
- $('#agents').innerHTML=judgeCard(h,isDemo)+h.agents.map((a,i)=>`<article class="agent"><div class="agent-head"><span class="agent-icon">${['⌁','⇄','◎','◇'][i%4]}</span><span class="tag ${a.verdict}">${labels[a.verdict]}</span></div><h3>${esc(a.name)}</h3><div class="role">${esc(a.role)}</div><div class="agent-explanation"><p><span>판단</span>${esc(a.summary)}</p><p><span>근거</span>${esc(a.evidence[0])}</p><p><span>재검토</span>${esc(a.invalidation)}</p></div><div class="agent-footer"><span>${esc(a.model)}${a.verification?` · 수치 ${esc(a.verification.matched)}/${esc(a.verification.checked)} 일치`:''}</span><button class="text-btn" data-agent="${i}" aria-label="${esc(a.name)}의 근거 보기">근거 보기 ↗</button></div></article>`).join('');
+ $('#agents').innerHTML=judgeCard(h)+h.agents.map((a,i)=>`<article class="agent"><div class="agent-head"><span class="agent-icon">${['⌁','⇄','◎','◇'][i%4]}</span><span class="tag ${a.verdict}">${labels[a.verdict]}</span></div><h3>${esc(a.name)}</h3><div class="role">${esc(a.role)}</div><div class="agent-explanation"><p><span>판단</span>${esc(a.summary)}</p><p><span>근거</span>${esc(a.evidence[0])}</p><p><span>재검토</span>${esc(a.invalidation)}</p></div><div class="agent-footer"><span>${esc(a.model)}${a.verification?` · 수치 ${esc(a.verification.matched)}/${esc(a.verification.checked)} 일치`:''}</span><button class="text-btn" data-agent="${i}" aria-label="${esc(a.name)}의 근거 보기">근거 보기 ↗</button></div></article>`).join('');
 }
 function verification(a){const v=a.verification;if(!v)return '';const changed=v.failed.length?` · 불일치가 있어 원래 판정(${esc(labels[v.originalVerdict]||v.originalVerdict)})을 관망으로 바꿨습니다.`:'';return `<div class="detail-label">수치 검증</div><div class="detail-copy">인용 ${esc(v.checked)}개 중 ${esc(v.matched)}개가 서버 계산값과 일치${changed}${v.numbersInText?' · 문장에 검증하지 않은 숫자가 있습니다.':''}</div>`}
 // The judge's synthesis leads the team section as one card spanning both columns.
-function judgeCard(h,isDemo){
+function judgeCard(h){
  const c=counts(h),changed=h.judge&&h.judge.originalVerdict!==h.verdict?` · 판정자 원래 판정 ${esc(labels[h.judge.originalVerdict]||h.judge.originalVerdict)} → 지지하는 팀원이 없어 관망`:'';
- const model=h.judge?h.judge.model:(isDemo?'데모 · 모델 미실행':'보고서 종합');
+ const model=h.judge?h.judge.model:'보고서 종합';
  return `<article class="agent judge-card"><div class="agent-head"><span class="agent-icon">⚖</span><span class="tag ${h.verdict}">${labels[h.verdict]}</span></div><h3>종합 판정자</h3><div class="role">팀원 의견 종합 · 최종 판단</div><div class="agent-explanation judge-explanation">${[['판단',h.summary],['공통',h.agreement],['이견',h.disagreement],['재검토',h.condition]].map(([k,v])=>`<p><span>${k}</span>${esc(v)}</p>`).join('')}</div><div class="agent-footer"><span>${esc(model)} · 롱 ${c.long} · 숏 ${c.short} · 관망 ${c.wait}${changed}</span></div></article>`;
 }
 function detail(index){const a=report.horizons[horizon].agents[index];if(!a)return;$('#detail-content').innerHTML=`<div class="detail-title"><h2>${esc(a.name)}</h2><span class="tag ${a.verdict}">${labels[a.verdict]}</span></div><div class="detail-meta">${esc(report.symbol)} · ${esc(report.horizons[horizon].label)} · ${esc(a.model)}<br>${esc(time(report.asOf))} · 프롬프트 ${esc(report.promptVersion)}</div><p class="detail-copy">${esc(a.summary)}</p><div class="detail-label">판정을 뒷받침하는 근거</div><ul class="detail-list">${a.evidence.map(e=>`<li>${esc(e)}</li>`).join('')}</ul>${verification(a)}<div class="detail-label">반대 근거 · 다른 가능성</div><div class="detail-copy">${esc(a.counter)}</div><div class="detail-label">이 판단을 철회하는 조건</div><div class="detail-copy">${esc(a.invalidation)}</div><div class="detail-label">사용한 자료</div>${a.sources.map(s=>`<p class="detail-meta">${s.url?`<a class="source-link" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)} ↗</a>`:esc(s.title)}<br>자료 기준: ${esc(time(s.asOf))}</p>`).join('')}<p class="footnote">표시 내용은 검토 가능한 근거 요약입니다. 모델의 내부 사고 과정이나 검증된 수익 확률을 의미하지 않습니다.</p>`;$('#detail').showModal()}
@@ -107,14 +114,14 @@ async function pollProgress(){
   if(data.state==='running')progressTimer=setTimeout(pollProgress,1000);
  }catch{progressTimer=setTimeout(pollProgress,3000)}
 }
-document.addEventListener('click',async e=>{
- if(!e.target.closest||!e.target.closest('#llm-load'))return;
+async function loadLast(message){
  try{
   const response=await fetch('/api/last-report',{cache:'no-store'});const data=await response.json();if(!response.ok)throw new Error(data.error||'결과를 불러오지 못했습니다.');
   const next=validate(data);report=next;history=[next,...history.filter(x=>x.id!==next.id)].slice(0,20);saveHistory();render();
-  $('#llm-status').textContent=next.symbol+' · 다른 창의 분석 결과를 불러왔습니다 · 기준 '+time(next.asOf);
+  $('#llm-status').textContent=next.symbol+' · '+message+' · 기준 '+time(next.asOf);
  }catch(err){$('#llm-status').textContent='결과 불러오기 실패: '+err.message}
-});
+}
+document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('#llm-load'))loadLast('다른 창의 분석 결과를 불러왔습니다')});
 $('#analyze').onclick=async()=>{
  const button=$('#analyze');if(button.disabled)return;
  const symbol=$('#chart-symbol').value;button.disabled=true;button.textContent='분석 중…';ownRun=true;
@@ -131,7 +138,14 @@ $('#analyze').onclick=async()=>{
  }catch(e){$('#llm-status').textContent='분석 실패: '+e.message+' 기존 보고서를 유지했습니다.';}
  finally{button.disabled=false;button.textContent='로컬 모델팀으로 분석';if(ownRun)await pollProgress();ownRun=false}
 };
-if(typeof fetch==='function')pollProgress();
+// Auto-run only on the first visit after the server starts (progress still idle); later visits load the server's
+// last result, and a run already going in another window just shows its progress.
+async function start(){
+ await pollProgress();
+ if(!progress)return $('#analyze').onclick();
+ if(progress.state==='done'&&progress.reportId)return loadLast('서버의 마지막 분석 결과를 불러왔습니다');
+}
+if(typeof fetch==='function')start();
 async function loadRoles(){
  const list=$('#llm-roles');list.innerHTML='<p class="footnote">LM Studio 모델 상태를 확인하는 중입니다.</p>';
  try{

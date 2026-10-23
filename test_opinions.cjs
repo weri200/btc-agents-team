@@ -10,6 +10,15 @@ function node(selector){
 }
 const context=vm.createContext({DeskModel:model,document:{body:{classList:{toggle(name,value){this[name]=value}}},querySelector:node,querySelectorAll:()=>[],addEventListener(){}},localStorage:{getItem:()=>null},Option:function(text,value){this.value=value},setTimeout,clearTimeout});
 vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'dist/app.js'),'utf8'),context);
+vm.runInContext('render()',context);
+assert.match(node('#agents').innerHTML,/아직 분석 결과가 없습니다/);
+assert.match(node('#horizons').innerHTML,/종합 의견이 여기에 표시됩니다/);
+assert(!node('#horizons').innerHTML.includes(model.demo().horizons.intraday.summary));
+assert(!node('#agents').innerHTML.includes(model.demo().horizons.intraday.agents[0].summary));
+assert.equal(node('#agent-count').textContent,'00');
+console.log('Passed: demo report shows no made-up team opinions.');
+context.analyzed=Object.assign(model.demo(),{mode:'analysis',origin:'local-llm'});
+vm.runInContext('report=analyzed',context);
 for(const horizon of ['intraday','swing']){
  vm.runInContext(`horizon='${horizon}';render()`,context);
  const html=node('#agents').innerHTML;
@@ -18,7 +27,7 @@ for(const horizon of ['intraday','swing']){
  assert.equal((html.match(/<p><span>/g)||[]).length,16);
  assert(html.startsWith('<article class="agent judge-card">'));
  assert(html.includes(esc(model.demo().horizons[horizon].summary)));
- assert.match(html,/데모 · 모델 미실행 · 롱 \d · 숏 \d · 관망 \d/);
+ assert.match(html,/보고서 종합 · 롱 \d · 숏 \d · 관망 \d/);
  assert(html.includes(model.demo().horizons[horizon].agents[0].invalidation));
 }
 node('#chart-symbol').value='ETHUSDT';node('#chart-symbol').change();
@@ -93,8 +102,30 @@ console.log('Passed: sidebar collapse and expansion with accessible state.');
  // Runs last: re-running app.js rebinds handlers on the shared fake nodes.
  {
   const stored=JSON.stringify([model.demo('BTCUSDT'),{schemaVersion:2},model.demo('ETHUSDT')]);
-  const other=vm.createContext({...context,localStorage:{getItem:()=>stored}});
-  vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'dist/app.js'),'utf8'),other);
+  // Startup: idle server -> analyze; finished run -> load its report; running elsewhere -> only show progress.
+  const source=fs.readFileSync(require('node:path').join(__dirname,'dist/app.js'),'utf8');
+  const open=async(serverState)=>{
+   const calls=[],last=Object.assign(model.demo(),{mode:'analysis',origin:'local-llm',id:'last-run'});
+   const page=vm.createContext({...context,localStorage:{getItem:()=>stored,setItem(){}},fetch:async(url,options)=>{
+    calls.push(url+' '+((options&&options.method)||'GET'));
+    if(url==='/api/progress')return {ok:true,json:async()=>serverState};
+    if(url==='/api/last-report')return {ok:true,json:async()=>last};
+    return {ok:false,status:409,json:async()=>({error:'busy'})};
+   }});
+   vm.runInContext(source,page);
+   await new Promise(r=>setTimeout(r,20));
+   vm.runInContext('clearTimeout(progressTimer);clearTimeout(tickTimer)',page);  // A running state keeps polling.
+   return {calls,report:vm.runInContext('report.id',page)};
+  };
+  let opened=await open({state:'idle'});
+  assert(opened.calls.includes('/api/analyze POST'));
+  opened=await open({state:'done',symbol:'BTCUSDT',reportId:'last-run',roles:[]});
+  assert(!opened.calls.includes('/api/analyze POST'));assert.equal(opened.report,'last-run');
+  opened=await open({state:'running',symbol:'BTCUSDT',stage:'analyzing',elapsedMs:1,roles:[]});
+  assert(!opened.calls.includes('/api/analyze POST'));assert(!opened.calls.includes('/api/last-report GET'));
+  console.log('Passed: only the first visit after server start analyzes; later visits load the last result.');
+  const other=vm.createContext({...context,localStorage:{getItem:()=>stored,setItem(){}},fetch:async()=>({ok:false,status:409,json:async()=>({})})});
+  vm.runInContext(source,other);
   assert.equal(vm.runInContext('history.map(r=>r.symbol).join()',other),'BTCUSDT,ETHUSDT');
   console.log('Passed: one invalid saved report does not erase the rest of the history.');
  }
