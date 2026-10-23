@@ -121,7 +121,11 @@ class LocalTeamTests(unittest.TestCase):
         self.assertEqual(call.call_count, 2)
 
     def test_wrong_citation_forces_wait(self):
-        report = self.run_team(FakeLMStudio(wrong={'technical'}))
+        seen = []
+        with patch.object(llm.progress, 'role', side_effect=lambda r, s, reason=None: seen.append((r, s, reason))):
+            report = self.run_team(FakeLMStudio(wrong={'technical'}))
+        self.assertIn(('technical', 'done', '단타·스윙 인용 수치가 서버 계산값과 달라 관망으로 바꿨습니다.'), seen)
+        self.assertIn(('critic', 'done', None), seen)  # No reason when every citation matches.
         agent = report['horizons']['intraday']['agents'][0]
         self.assertEqual(agent['verdict'], 'wait')
         self.assertEqual(agent['verification']['originalVerdict'], 'long')
@@ -215,10 +219,12 @@ class ProgressTests(unittest.TestCase):
         self.progress.role('technical', 'done')
         self.assertIn('durationMs', self.progress.snapshot()['roles'][0])
         self.progress.role('derivatives', 'running')
-        self.progress.finish(error='LM Studio 오류')
+        self.progress.finish(error='파생상품 분석가(model-b): LM Studio 오류')
         state = self.progress.snapshot()
-        self.assertEqual((state['state'], state['error']), ('failed', 'LM Studio 오류'))
+        self.assertEqual((state['state'], state['error']), ('failed', '파생상품 분석가(model-b): LM Studio 오류'))
         self.assertEqual([r['status'] for r in state['roles']][:2], ['done', 'failed'])
+        self.assertEqual([r.get('reason') for r in state['roles']],
+                         [None, 'LM Studio 오류', *['앞 단계에서 분석이 중단되어 실행하지 않았습니다.'] * 2])
         self.assertIn('model-a', json.loads(self.path.read_text(encoding='utf-8')))
         self.progress.begin('ETHUSDT', CONFIG['roles'])
         self.assertLess(self.progress.snapshot()['roles'][0]['expectedMs'], 60000)
@@ -241,7 +247,7 @@ class ProgressTests(unittest.TestCase):
 
     def test_analyze_reports_each_role(self):
         seen = []
-        with patch.object(llm.progress, 'role', side_effect=lambda r, s: seen.append((r, s))),                 patch.object(llm, 'request', side_effect=FakeLMStudio()):
+        with patch.object(llm.progress, 'role', side_effect=lambda r, s, reason=None: seen.append((r, s))),                 patch.object(llm, 'request', side_effect=FakeLMStudio()):
             llm.analyze(make_snapshot(), CONFIG)
         self.assertEqual(seen, [(r, s) for r in ('technical', 'derivatives', 'critic', 'judge') for s in ('running', 'done')])
 
@@ -289,10 +295,10 @@ class MacroRoleTests(unittest.TestCase):
     def test_unavailable_macro_keeps_placeholder(self):
         fake = FakeLMStudio()
         seen = []
-        with patch.object(llm.progress, 'role', side_effect=lambda r, s: seen.append((r, s))):
+        with patch.object(llm.progress, 'role', side_effect=lambda r, s, reason=None: seen.append((r, s, reason))):
             report = self.run_team(fake, {'error': 'OpenBB 가상환경(.venv)이 없습니다.'})
         self.assertEqual([r for r, _, _ in fake.calls], ['technical', 'derivatives', 'critic', 'judge'])
-        self.assertIn(('macro', 'skipped'), seen)
+        self.assertIn(('macro', 'skipped', 'OpenBB 가상환경(.venv)이 없습니다.'), seen)
         agent = report['horizons']['swing']['agents'][2]
         self.assertEqual((agent['id'], agent['verdict'], agent['model']), ('macro', 'wait', '미실행 · 자료 부족'))
         self.assertIn('가상환경', agent['evidence'][0])
