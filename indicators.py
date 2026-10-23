@@ -64,9 +64,10 @@ def interval_indicators(bars):
     for lookback in (1, 20):
         if len(closes) > lookback:
             result[f'change{lookback}Pct'] = round((close / closes[-1 - lookback] - 1) * 100, 3)
-    if len(bars) >= VOLUME_WINDOW:
-        result['high20'] = sig(max(highs[-VOLUME_WINDOW:]))
-        result['low20'] = sig(min(lows[-VOLUME_WINDOW:]))
+    if len(bars) > VOLUME_WINDOW:
+        # Prior 20 bars only (Donchian), so the latest close can break out of the range.
+        result['high20'] = sig(max(highs[-VOLUME_WINDOW - 1:-1]))
+        result['low20'] = sig(min(lows[-VOLUME_WINDOW - 1:-1]))
     if len(volumes) > VOLUME_WINDOW:
         average = sum(volumes[-VOLUME_WINDOW - 1:-1]) / VOLUME_WINDOW
         if average > 0:
@@ -169,6 +170,10 @@ def describe(facts, keys):
             side = '시장가 매수 우위' if value > 1 else '시장가 매도 우위' if value < 1 else '균형'
             versus = '' if average is None else f", 24기간 평균 {average}보다 {'높음' if value > average else '낮음' if value < average else '같음'}"
             lines.append(f'{frame} 테이커 매수/매도 비율 {value}: {side}{versus}')
+        elif name == 'high20' and f'{frame}.low20' in facts and f'{frame}.close' in facts:
+            close, low = facts[f'{frame}.close'], facts[f'{frame}.low20']
+            where = '고점 위로 돌파' if close > value else '저점 아래로 이탈' if close < low else '범위 안'
+            lines.append(f'{frame} 종가는 직전 20봉 {where}')
         elif name == 'fundingRatePct':
             lines.append(f"현재 펀딩비율 {value}%: {'롱이 숏에 지불' if value > 0 else '숏이 롱에 지불' if value < 0 else '0'}")
         elif name == 'premiumPct':
