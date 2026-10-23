@@ -40,6 +40,9 @@ class IndicatorTests(unittest.TestCase):
         result = ind.interval_indicators(data)
         self.assertEqual(result['volumeRatio20'], 3.0)
         self.assertEqual(result['change1Pct'], 10.0)
+        self.assertEqual(result['high20'], 101.0)  # excludes the breakout bar itself
+        facts = {f'15m.{k}': v for k, v in result.items()}
+        self.assertIn('15m 종가는 직전 20봉 고점 위로 돌파', ind.describe(facts, ['15m.high20']))
 
     def test_market_and_flatten(self):
         facts = ind.flatten(ind.compute(snapshot([100.0 + i for i in range(30)])))
