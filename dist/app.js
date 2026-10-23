@@ -55,7 +55,7 @@ const marks={
  qwen:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7z" fill="none" stroke="#615ced" stroke-width="2.2"/><path d="M12 7.5a4.5 4.5 0 1 0 2.9 7.95L17 17.5" fill="none" stroke="#615ced" stroke-width="2.2" stroke-linecap="round"/></svg>'
 };
 function markFor(model){const m=String(model).toLowerCase();const key=m.includes('mistral')?'mistral':m.includes('phi')||m.includes('microsoft')?'microsoft':m.includes('gemma')||m.includes('google')?'gemma':m.includes('qwen')?'qwen':null;return key?marks[key]:`<span class="initials">${esc(m.split('/').pop().slice(0,2).toUpperCase())}</span>`}
-const seconds=ms=>Math.max(0,Math.round(ms/1000))+'초';
+const seconds=ms=>{const s=Math.max(0,Math.round(ms/1000));return s<60?s+'초':`${Math.floor(s/60)}분${s%60?` ${s%60}초`:''}`};
 let progress=null,progressAt=0,progressTimer=null,tickTimer=null,ownRun=false;
 function roleProgress(r){
  if(r.status==='done'||r.status==='failed')return 1;
@@ -75,8 +75,8 @@ function renderProgress(){
  box.innerHTML=progress.roles.map(r=>`<div class="role-card ${esc(r.status)}" style="--p:${roleProgress(r).toFixed(3)}" role="group" aria-label="${esc(r.name)} ${esc(roleText(r))}"><div class="role-inner"><div class="role-ring"><div class="role-logo">${markFor(r.model)}</div></div><div class="role-text"><b>${esc(r.name)}</b><span title="${esc(r.model)}">${esc(r.model)}</span><em>${esc(roleText(r))}</em></div></div></div>`).join('');
  const elapsed=seconds((progress.elapsedMs||0)+(progress.state==='running'?Date.now()-progressAt:0));
  if(progress.state==='running')$('#llm-status').textContent=`${progress.symbol} · ${progress.stage==='collecting'?'시장·수급 데이터 수집 중':'역할별 모델 분석 중'} · 경과 ${elapsed}${ownRun?'':' · 다른 창에서 시작한 분석입니다.'}`;
- else if(!ownRun&&progress.state==='done'&&progress.reportId&&progress.reportId!==report.id)$('#llm-status').innerHTML=`${esc(progress.symbol)} · 다른 창에서 분석이 끝났습니다 · ${esc(elapsed)} <button class="btn" id="llm-load" type="button">결과 불러오기</button>`;
- else if(!ownRun&&progress.state==='failed')$('#llm-status').textContent=`${progress.symbol} · 다른 창의 분석 실패: ${progress.error||''}`;
+ else if(!ownRun&&progress.state==='done'&&progress.reportId&&progress.reportId!==report.id)$('#llm-status').innerHTML=`<span>${esc(progress.symbol)} · 마지막 분석 완료 · ${esc(elapsed)}</span><button class="btn" id="llm-load" type="button">결과 불러오기</button>`;
+ else if(!ownRun&&progress.state==='failed')$('#llm-status').textContent=`${progress.symbol} · 마지막 분석 실패: ${progress.error||''}`;
 }
 function tick(){clearTimeout(tickTimer);if(progress&&progress.state==='running'){renderProgress();tickTimer=setTimeout(tick,250)}}
 async function pollProgress(){

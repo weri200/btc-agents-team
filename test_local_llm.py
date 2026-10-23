@@ -219,6 +219,7 @@ class ProgressTests(unittest.TestCase):
         self.progress.finish(error='늦은 오류')
         state = self.progress.snapshot()
         self.assertEqual((state['state'], state['reportId']), ('done', 'r1'))
+        self.assertEqual(state['elapsedMs'], state['durationMs'])
         self.assertEqual(self.progress.last_report, {'id': 'r1'})
 
     def test_bad_timing_file_falls_back(self):

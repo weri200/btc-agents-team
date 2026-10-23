@@ -95,7 +95,9 @@ class Progress:
             now = time.monotonic()
             result = {k: v for k, v in self.state.items() if k not in ('started', 'roles')}
             if 'started' in self.state:
-                result['elapsedMs'] = round((now - self.state['started']) * 1000)
+                # A finished run reports its fixed duration, not time since it started.
+                result['elapsedMs'] = (round((now - self.state['started']) * 1000) if self.state['state'] == 'running'
+                                       else self.state['durationMs'])
             if 'roles' in self.state:
                 result['roles'] = [{**{k: v for k, v in r.items() if k != 'started'},
                                     **({'elapsedMs': round((now - r['started']) * 1000)} if r['status'] == 'running' else {})}
