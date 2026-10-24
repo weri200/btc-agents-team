@@ -54,6 +54,8 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == '/api/scores':
             return self.json_response(200, {'holds': {h: {'interval': i, 'hours': ms // 3600000} for h, (i, ms) in journal.HOLDS.items()},
                                             'points': journal.POINTS,
+                                            'rules': journal.rule_scores(collector.db_path),
+                                            'ruleLabels': {k: label for k, (label, _) in journal.RULES.items()},
                                             'groups': journal.scores(collector.db_path)})
         if parsed.path == '/api/backtests':
             query = parse_qs(parsed.query, keep_blank_values=True)
