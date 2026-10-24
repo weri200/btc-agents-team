@@ -217,6 +217,12 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.get('/api/market?symbol=BTCUSDT', {'Origin': 'https://other.example'})[0], 403)
         self.assertEqual(self.get('/', {'Host': 'other.example'})[0], 403)
 
+    def test_scores_include_rule_comparison(self):
+        with patch.object(server.journal, 'scores', return_value=[]), patch.object(server.journal, 'rule_scores', return_value=[{'rule': 'unopposed'}]):
+            data = json.loads(self.get('/api/scores')[1])
+        self.assertEqual(data['rules'], [{'rule': 'unopposed'}])
+        self.assertEqual(set(data['ruleLabels']), set(server.journal.RULES))
+
     def test_backtest_endpoints(self):
         with patch.object(server.journal, 'backtests', return_value={'total': 0, 'reports': []}):
             self.assertEqual(json.loads(self.get('/api/backtests')[1]), {'total': 0, 'reports': []})

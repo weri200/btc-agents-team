@@ -10,6 +10,8 @@ from market import DB, INTERVALS
 # How long each horizon's call is held before it is scored, and which stored bars measure it.
 # shortcut: fixed holds and close-to-close returns without fees or stops; add those when the rules state them.
 HOLDS = {'intraday': ('15m', 4 * 3600000), 'swing': ('4h', 72 * 3600000)}
+# Points per call: a wait costs less than a wrong call, so waiting is never free but beats guessing wrong.
+POINTS = {'hit': 1.0, 'miss': -1.0, 'wait': -0.25}
 
 
 def connect(path):
@@ -45,51 +47,121 @@ def close_at(db, symbol, interval, at):
 
 
 def outcome(db, symbol, as_of, horizon, verdict, now):
-    """How one call came out: wait, pending, missing, or hit/miss with the entry and exit closes and the signed return."""
-    if verdict == 'wait':
-        return {'status': 'wait'}
+    """How one call came out once its hold is over: wait, missing, or hit/miss with the entry and exit closes and the signed return."""
     interval, hold = HOLDS[horizon]
     if as_of + hold > now:
         return {'status': 'pending'}
+    if verdict == 'wait':
+        return {'status': 'wait', 'points': POINTS['wait']}
     entry, exit_ = close_at(db, symbol, interval, as_of), close_at(db, symbol, interval, as_of + hold)
     if entry is None or exit_ is None:
         return {'status': 'missing'}  # The server was not collecting then; the call cannot be scored.
     ret = (exit_ / entry - 1) * (1 if verdict == 'long' else -1)
-    return {'status': 'hit' if ret > 0 else 'miss', 'entry': entry, 'exit': exit_, 'return': ret}
+    status = 'hit' if ret > 0 else 'miss'
+    return {'status': status, 'entry': entry, 'exit': exit_, 'return': ret, 'points': POINTS[status]}
 
 
 def ensure_candles(db):
     db.execute('CREATE TABLE IF NOT EXISTS candles (symbol TEXT, interval TEXT, open_time INTEGER, payload TEXT, PRIMARY KEY(symbol,interval,open_time))')
 
 
+def tally(groups, key, verdict, result):
+    """Add one call and its outcome to the group under `key`; `key` is a dict of the fields that name the group."""
+    g = groups.setdefault(tuple(key.values()), {**key, 'calls': 0, 'long': 0, 'short': 0, 'wait': 0, 'pending': 0, 'missing': 0,
+                                                'scored': 0, 'hits': 0, 'returns': [], 'points': []})
+    g['calls'] += 1
+    g[verdict] += 1
+    if result['status'] in ('pending', 'missing'):
+        g[result['status']] += 1
+        return
+    g['points'].append(result['points'])
+    if result['status'] != 'wait':
+        g['scored'] += 1
+        g['hits'] += result['status'] == 'hit'
+        g['returns'].append(result['return'])
+
+
+def summarize(groups):
+    result = []
+    for g in groups.values():
+        returns, points = g.pop('returns'), g.pop('points')
+        g['waitRate'] = g['wait'] / g['calls']
+        g['hitRate'] = g['hits'] / g['scored'] if g['scored'] else None
+        g['meanReturnPct'] = sum(returns) / len(returns) * 100 if returns else None
+        g['score'] = sum(points) / len(points) if points else None
+        result.append(g)
+    return result
+
+
 def scores(path=DB, now=None):
-    """Per mode (live analysis or backtest), prompt version, horizon and role: call counts, and hit rate and mean return of long/short calls."""
+    """Per mode (live analysis or backtest), prompt version, horizon and role: call counts, hit rate and mean return of long/short calls,
+    and the mean points of every call whose hold is over (waits included at their smaller penalty)."""
     now = now or int(datetime.now().timestamp() * 1000)
     groups = {}
     with closing(connect(path)) as db:
         ensure_candles(db)
         query = 'SELECT r.symbol, r.as_of, r.mode, r.prompt_version, v.horizon, v.role, v.verdict FROM verdicts v JOIN reports r ON r.id = v.report_id'
         for symbol, as_of, mode, version, horizon, role, verdict in db.execute(query).fetchall():
-            g = groups.setdefault((mode, version, horizon, role), {'mode': mode, 'promptVersion': version, 'horizon': horizon, 'role': role,
-                                                             'calls': 0, 'long': 0, 'short': 0, 'wait': 0,
-                                                             'pending': 0, 'missing': 0, 'scored': 0, 'hits': 0, 'returns': []})
-            g['calls'] += 1
-            g[verdict] += 1
-            result = outcome(db, symbol, as_of, horizon, verdict, now)
-            if result['status'] in ('pending', 'missing'):
-                g[result['status']] += 1
-            elif result['status'] != 'wait':
-                g['scored'] += 1
-                g['hits'] += result['status'] == 'hit'
-                g['returns'].append(result['return'])
-    result = []
-    for g in groups.values():
-        returns = g.pop('returns')
-        g['waitRate'] = g['wait'] / g['calls']
-        g['hitRate'] = g['hits'] / g['scored'] if g['scored'] else None
-        g['meanReturnPct'] = sum(returns) / len(returns) * 100 if returns else None
-        result.append(g)
-    return sorted(result, key=lambda g: (g['mode'], g['promptVersion'], g['horizon'], g['role'] != 'judge', g['role']))
+            key = {'mode': mode, 'promptVersion': version, 'horizon': horizon, 'role': role}
+            tally(groups, key, verdict, outcome(db, symbol, as_of, horizon, verdict, now))
+    return sorted(summarize(groups), key=lambda g: (g['mode'], g['promptVersion'], g['horizon'], g['role'] != 'judge', g['role']))
+
+
+# Ways to turn the team's verified votes into one call. A wait is an abstention, not a vote, so a seat with no data
+# (the macro seat in a backtest) or a critic that only raised doubts does not block the analysts who did take a side.
+ANALYSTS = ('technical', 'derivatives', 'macro')
+OPPOSITE = {'long': 'short', 'short': 'long'}
+
+
+def unopposed(team, judge):
+    """The one direction analysts hold, if no team member (critic included) takes the other side."""
+    sides = {team.get(role) for role in ANALYSTS} - {'wait', None}
+    if len(sides) != 1:
+        return 'wait'
+    side = sides.pop()
+    return 'wait' if OPPOSITE[side] in team.values() else side
+
+
+def majority(team, judge):
+    """Whichever of long and short more team members hold, critic included; a tie is a wait."""
+    votes = list(team.values())
+    longs, shorts = votes.count('long'), votes.count('short')
+    return 'long' if longs > shorts else 'short' if shorts > longs else 'wait'
+
+
+RULES = {
+    'judge': ('LLM 종합 판정자', lambda team, judge: judge),
+    'technical': ('기술 분석가만 따름', lambda team, judge: team.get('technical', 'wait')),
+    'unopposed': ('반대 없는 방향', unopposed),
+    'majority': ('다수결 · 관망은 기권', majority),
+}
+
+
+def rule_scores(path=DB, now=None):
+    """Every rule in RULES applied to the stored team votes, scored like scores() per mode, prompt version and horizon."""
+    now = now or int(datetime.now().timestamp() * 1000)
+    calls = {}
+    with closing(connect(path)) as db:
+        ensure_candles(db)
+        query = ('SELECT r.id, r.symbol, r.as_of, r.mode, r.prompt_version, v.horizon, v.role, v.verdict '
+                 'FROM verdicts v JOIN reports r ON r.id = v.report_id')
+        for rid, symbol, as_of, mode, version, horizon, role, verdict in db.execute(query).fetchall():
+            call = calls.setdefault((rid, horizon), {'symbol': symbol, 'asOf': as_of, 'mode': mode, 'version': version, 'team': {}})
+            if role == 'judge':
+                call['judge'] = verdict
+            else:
+                call['team'][role] = verdict
+        groups = {}
+        for (_, horizon), call in calls.items():
+            seen = {}  # rules often agree; score each distinct verdict once
+            for rule, (_, decide) in RULES.items():
+                verdict = decide(call['team'], call.get('judge', 'wait'))
+                if verdict not in seen:
+                    seen[verdict] = outcome(db, call['symbol'], call['asOf'], horizon, verdict, now)
+                key = {'mode': call['mode'], 'promptVersion': call['version'], 'horizon': horizon, 'rule': rule}
+                tally(groups, key, verdict, seen[verdict])
+    order = list(RULES)
+    return sorted(summarize(groups), key=lambda g: (g['mode'], g['promptVersion'], g['horizon'], order.index(g['rule'])))
 
 
 def backtests(path=DB, now=None, limit=100):
