@@ -2,7 +2,6 @@
 (() => {
   const host = document.getElementById('market-chart');
   const symbol = document.getElementById('chart-symbol');
-  const interval = document.getElementById('chart-interval');
   const studyBox = document.getElementById('chart-studies');
   const studyCount = document.getElementById('chart-study-count');
   // TradingView built-in studies offered as presets. More can be added from the chart's own indicator menu,
@@ -11,9 +10,13 @@
     ['STD;SMA', '이동평균 (SMA)'], ['STD;EMA', '지수이동평균 (EMA)'], ['STD;Bollinger_Bands', '볼린저 밴드'],
     ['STD;VWAP', 'VWAP'], ['STD;RSI', 'RSI'], ['STD;MACD', 'MACD'], ['STD;Stochastic_RSI', '스토캐스틱 RSI'],
     ['STD;Average_True_Range', 'ATR'], ['STD;Ichimoku_Cloud', '일목균형표'],
+    ['STD;Supertrend', '슈퍼트렌드'], ['STD;PSAR', '파라볼릭 SAR'], ['STD;Donchian_Channels', '돈치안 채널'],
+    ['STD;Keltner_Channels', '켈트너 채널'], ['STD;Stochastic', '스토캐스틱'], ['STD;DMI', 'DMI (ADX 포함)'],
+    ['STD;CCI', 'CCI'], ['STD;Money_Flow', 'MFI'], ['STD;On_Balance_Volume', 'OBV'], ['STD;Willams_R', '윌리엄스 %R'], // TradingView's own spelling
   ];
   // Oscillators open their own pane under the price; the chart grows so the price pane keeps its height.
-  const PANE_STUDIES = new Set(['STD;RSI', 'STD;MACD', 'STD;Stochastic_RSI', 'STD;Average_True_Range']);
+  const PANE_STUDIES = new Set(['STD;RSI', 'STD;MACD', 'STD;Stochastic_RSI', 'STD;Average_True_Range',
+    'STD;Stochastic', 'STD;DMI', 'STD;CCI', 'STD;Money_Flow', 'STD;On_Balance_Volume', 'STD;Willams_R']);
   const KEY = 'futures-desk-studies';
   let selected, renderedTheme, renderedStudies;
   try {
@@ -65,7 +68,8 @@
     script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
     script.async = true;
     script.textContent = JSON.stringify({
-      autosize: true, symbol: ticker, interval: interval.value,
+      autosize: true, symbol: ticker, // Opens on 4h; the chart's own toolbar changes the interval.
+      interval: '240',
       timezone: 'Asia/Seoul', theme: renderedTheme,
       style: '1', locale: 'kr', allow_symbol_change: false,
       // The top toolbar carries TradingView's own indicator menu for anything not in the presets.
@@ -89,7 +93,7 @@
   });
   // A click outside closes the menu, so a change applies without reopening it.
   document.addEventListener('click', e => { if (menuHost.open && !menuHost.contains(e.target)) menuHost.open = false; });
-  symbol.onchange = interval.onchange = renderChart;
+  symbol.onchange = renderChart;
   document.getElementById('chart-retry').onclick = renderChart;
   document.getElementById('chart-studies-reset').onclick = () => {
     selected = [];

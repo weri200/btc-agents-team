@@ -23,7 +23,7 @@ for(const saved of [null,'dark','light','invalid']){
 assert.doesNotThrow(()=>vm.runInNewContext(themeSource,{matchMedia:()=>({matches:false,addEventListener(){}}),localStorage:{getItem(){throw Error('blocked')}},document:{documentElement:{dataset:{}},getElementById:()=>null,addEventListener(){}}}));
 console.log('Passed: theme preference, system default, toggle, persistence, and unavailable storage.');
 const element=()=>({children:[],style:{setProperty(k,v){this[k]=v}},append(...nodes){this.children.push(...nodes)},replaceChildren(...nodes){this.children=nodes}});
-const chartNodes={'market-chart':element(),'chart-symbol':{value:'BTCUSDT'},'chart-interval':{value:'15'},'chart-link':{},'chart-retry':{},'chart-studies':Object.assign(element(),{closest:()=>menu}),'chart-study-count':{},'chart-studies-reset':{}};
+const chartNodes={'market-chart':element(),'chart-symbol':{value:'BTCUSDT'},'chart-link':{},'chart-retry':{},'chart-studies':Object.assign(element(),{closest:()=>menu}),'chart-study-count':{},'chart-studies-reset':{}};
 let closeMenu,outsideClick;const menu={open:true,contains:n=>n==='inside',classList:{toggle(){}},getBoundingClientRect:()=>({right:500}),addEventListener(_,fn){closeMenu=fn}};
 const chartStore={'futures-desk-studies':JSON.stringify(['STD;RSI','bogus'])};
 let themeChanged;
@@ -32,7 +32,7 @@ vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__d
 const chartConfig=()=>JSON.parse(chartNodes['market-chart'].children[0].children[2].textContent);
 assert.equal(chartConfig().symbol,'BINANCE:BTCUSDT.P');
 chartNodes['chart-symbol'].value='ETHUSDT';chartNodes['chart-symbol'].onchange();assert.equal(chartConfig().symbol,'BINANCE:ETHUSDT.P');
-chartNodes['chart-interval'].value='60';chartNodes['chart-interval'].onchange();assert.equal(chartConfig().interval,'60');
+assert.equal(chartConfig().interval,'240');
 chartRoot.dataset.theme='light';themeChanged();assert.equal(chartConfig().theme,'light');
 const sameTheme=chartNodes['market-chart'].children[0];themeChanged();assert.equal(chartNodes['market-chart'].children[0],sameTheme);
 chartNodes['market-chart'].children[0].children[2].onerror();assert.match(chartNodes['market-chart'].children[0].children[0].textContent,/네트워크/);
@@ -48,4 +48,4 @@ outsideClick({target:'outside'});assert.equal(menu.open,false);closeMenu();
 assert.deepEqual(chartConfig().studies,['STD;RSI','STD;MACD']);assert.equal(chartNodes['market-chart'].style['--study-panes'],2);assert.equal(chartStore['futures-desk-studies'],'["STD;RSI","STD;MACD"]');
 const afterMacd=chartNodes['market-chart'].children[0];closeMenu();assert.equal(chartNodes['market-chart'].children[0],afterMacd);
 chartNodes['chart-studies-reset'].onclick();closeMenu();assert.deepEqual(chartConfig().studies,[]);assert.equal(chartNodes['chart-study-count'].textContent,'지표');
-console.log('Passed: chart symbol, interval, theme sync, error fallback, and retry.');
+console.log('Passed: chart symbol, default interval, theme sync, error fallback, and retry.');
