@@ -381,11 +381,12 @@ def analyze(snapshot, config=None):
                    for h, (_, _, frames) in HORIZONS.items()}
             for role, allowed in ROLE_FACTS.items()}
     stamp = iso(snapshot['serverTime'])
+    shown = '비공개' if snapshot.get('hideDate') else stamp  # backtests hide the date so models cannot recall that day
     warnings = (list(snapshot['warnings']) + list((snapshot.get('derivatives') or {}).get('warnings', []))
                 + list(macro.get('warnings', [])))
     if 'macro' in roles and not macro_ready:
         warnings.append('뉴스·거시 분석가: ' + (macro.get('error') or 'OpenBB 자료가 없어 실행하지 않았습니다.'))
-    data = {'symbol': snapshot['symbol'], 'asOf': stamp, 'warnings': list(warnings)}
+    data = {'symbol': snapshot['symbol'], 'asOf': shown, 'warnings': list(warnings)}
     news = {n['id']: n for n in macro.get('news', [])} if macro_ready else {}
 
     outputs, checks = {}, {}
@@ -418,7 +419,7 @@ def analyze(snapshot, config=None):
     elif 'macro' in roles:
         progress.role('macro', 'skipped', macro.get('error') or 'OpenBB 자료가 없습니다.')
     run('critic', {'team': team_view(analysts)})
-    judge_input = {'symbol': snapshot['symbol'], 'asOf': stamp, 'warnings': list(warnings),
+    judge_input = {'symbol': snapshot['symbol'], 'asOf': shown, 'warnings': list(warnings),
                    'team': team_view([*analysts, 'critic'])}
     if not macro_ready:
         judge_input['missing'] = '뉴스·거시 자료가 없어 해당 분석가는 관망입니다.'
