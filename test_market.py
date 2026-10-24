@@ -217,6 +217,15 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.get('/api/market?symbol=BTCUSDT', {'Origin': 'https://other.example'})[0], 403)
         self.assertEqual(self.get('/', {'Host': 'other.example'})[0], 403)
 
+    def test_backtest_endpoints(self):
+        with patch.object(server.journal, 'backtests', return_value={'total': 0, 'reports': []}):
+            self.assertEqual(json.loads(self.get('/api/backtests')[1]), {'total': 0, 'reports': []})
+        with patch.object(server.journal, 'backtest_report', side_effect=lambda rid, path: {'id': rid} if rid == 'a' else None):
+            self.assertEqual(json.loads(self.get('/api/backtests?id=a')[1]), {'id': 'a'})
+            self.assertEqual(self.get('/api/backtests?id=b')[0], 404)
+        for path in ('/api/backtests?id=', '/api/backtests?id=a&id=b', '/api/backtests?x=1', '/api/backtests?id=' + 'a' * 65):
+            self.assertEqual(self.get(path)[0], 400)
+
     def test_error_status(self):
         with patch.object(server.collector, 'collect', side_effect=market.MarketError('offline')):
             status, body = self.get('/api/market?symbol=BTCUSDT')

@@ -26,7 +26,7 @@
     ['id','symbol','promptVersion'].forEach(k=>str(r[k],k,120));
     if(!/^[A-Z0-9]{3,30}$/.test(r.symbol))fail('종목 형식이 올바르지 않습니다.');
     if(r.exchange!=='Binance'||r.market!=='USDⓈ-M perpetual')fail('이 GUI는 Binance USDⓈ-M 무기한 보고서를 지원합니다.');
-    if(!['demo','analysis'].includes(r.mode))fail('mode는 demo 또는 analysis여야 합니다.');date(r.asOf);
+    if(!['demo','analysis','backtest'].includes(r.mode))fail('mode는 demo, analysis, backtest 중 하나여야 합니다.');date(r.asOf);
     for(const key of ['intraday','swing']){
       const h=r.horizons?.[key];if(!h)fail('단타와 스윙 보고서가 모두 필요합니다.');
       ['label','timeframes','summary','agreement','disagreement','condition'].forEach(k=>str(h[k],k));
