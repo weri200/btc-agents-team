@@ -10,6 +10,8 @@ from market import DB, INTERVALS
 # How long each horizon's call is held before it is scored, and which stored bars measure it.
 # shortcut: fixed holds and close-to-close returns without fees or stops; add those when the rules state them.
 HOLDS = {'intraday': ('15m', 4 * 3600000), 'swing': ('4h', 72 * 3600000)}
+# Points per call: a wait costs less than a wrong call, so waiting is never free but beats guessing wrong.
+POINTS = {'hit': 1.0, 'miss': -1.0, 'wait': -0.25}
 
 
 def connect(path):
@@ -45,17 +47,18 @@ def close_at(db, symbol, interval, at):
 
 
 def outcome(db, symbol, as_of, horizon, verdict, now):
-    """How one call came out: wait, pending, missing, or hit/miss with the entry and exit closes and the signed return."""
-    if verdict == 'wait':
-        return {'status': 'wait'}
+    """How one call came out once its hold is over: wait, missing, or hit/miss with the entry and exit closes and the signed return."""
     interval, hold = HOLDS[horizon]
     if as_of + hold > now:
         return {'status': 'pending'}
+    if verdict == 'wait':
+        return {'status': 'wait', 'points': POINTS['wait']}
     entry, exit_ = close_at(db, symbol, interval, as_of), close_at(db, symbol, interval, as_of + hold)
     if entry is None or exit_ is None:
         return {'status': 'missing'}  # The server was not collecting then; the call cannot be scored.
     ret = (exit_ / entry - 1) * (1 if verdict == 'long' else -1)
-    return {'status': 'hit' if ret > 0 else 'miss', 'entry': entry, 'exit': exit_, 'return': ret}
+    status = 'hit' if ret > 0 else 'miss'
+    return {'status': status, 'entry': entry, 'exit': exit_, 'return': ret, 'points': POINTS[status]}
 
 
 def ensure_candles(db):
@@ -63,7 +66,8 @@ def ensure_candles(db):
 
 
 def scores(path=DB, now=None):
-    """Per mode (live analysis or backtest), prompt version, horizon and role: call counts, and hit rate and mean return of long/short calls."""
+    """Per mode (live analysis or backtest), prompt version, horizon and role: call counts, hit rate and mean return of long/short calls,
+    and the mean points of every call whose hold is over (waits included at their smaller penalty)."""
     now = now or int(datetime.now().timestamp() * 1000)
     groups = {}
     with closing(connect(path)) as db:
@@ -72,22 +76,25 @@ def scores(path=DB, now=None):
         for symbol, as_of, mode, version, horizon, role, verdict in db.execute(query).fetchall():
             g = groups.setdefault((mode, version, horizon, role), {'mode': mode, 'promptVersion': version, 'horizon': horizon, 'role': role,
                                                              'calls': 0, 'long': 0, 'short': 0, 'wait': 0,
-                                                             'pending': 0, 'missing': 0, 'scored': 0, 'hits': 0, 'returns': []})
+                                                             'pending': 0, 'missing': 0, 'scored': 0, 'hits': 0, 'returns': [], 'points': []})
             g['calls'] += 1
             g[verdict] += 1
             result = outcome(db, symbol, as_of, horizon, verdict, now)
             if result['status'] in ('pending', 'missing'):
                 g[result['status']] += 1
-            elif result['status'] != 'wait':
+                continue
+            g['points'].append(result['points'])
+            if result['status'] != 'wait':
                 g['scored'] += 1
                 g['hits'] += result['status'] == 'hit'
                 g['returns'].append(result['return'])
     result = []
     for g in groups.values():
-        returns = g.pop('returns')
+        returns, points = g.pop('returns'), g.pop('points')
         g['waitRate'] = g['wait'] / g['calls']
         g['hitRate'] = g['hits'] / g['scored'] if g['scored'] else None
         g['meanReturnPct'] = sum(returns) / len(returns) * 100 if returns else None
+        g['score'] = sum(points) / len(points) if points else None
         result.append(g)
     return sorted(result, key=lambda g: (g['mode'], g['promptVersion'], g['horizon'], g['role'] != 'judge', g['role']))
 

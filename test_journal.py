@@ -55,10 +55,14 @@ class JournalTest(unittest.TestCase):
         self.assertEqual((intraday['calls'], intraday['long'], intraday['short'], intraday['wait']), (4, 3, 1, 0))
         self.assertEqual((intraday['scored'], intraday['hits'], intraday['missing'], intraday['pending']), (2, 1, 1, 1))
         self.assertAlmostEqual(intraday['meanReturnPct'], 0.0)
+        self.assertAlmostEqual(intraday['score'], 0.0)  # one hit +1, one miss -1
         swing = self.group(groups, 'swing')
         self.assertEqual((swing['scored'], swing['hits'], swing['wait'], swing['pending'], swing['missing']), (1, 1, 1, 1, 1))
         self.assertAlmostEqual(swing['meanReturnPct'], 10.0)
         self.assertAlmostEqual(swing['waitRate'], 0.25)
+        self.assertAlmostEqual(swing['score'], (1 + journal.POINTS['wait']) / 2)  # a hit and a finished wait; missing and pending left out
+        self.assertLess(journal.POINTS['miss'], journal.POINTS['wait'])
+        self.assertLess(journal.POINTS['wait'], 0)
         # Team members are scored separately from the judge.
         self.assertEqual(self.group(groups, 'swing', 'technical')['long'], 4)
 
@@ -66,7 +70,8 @@ class JournalTest(unittest.TestCase):
         journal.save_report(report('a', T0, 'wait', 'wait'), self.path)
         journal.save_report(report('a', T0, 'wait', 'wait'), self.path)
         group = self.group(journal.scores(self.path, now=T0), 'intraday')
-        self.assertEqual((group['calls'], group['hitRate'], group['meanReturnPct']), (1, None, None))
+        self.assertEqual((group['calls'], group['pending'], group['hitRate'], group['meanReturnPct'], group['score']), (1, 1, None, None, None))
+        self.assertEqual(self.group(journal.scores(self.path, now=T0 + 4 * H), 'intraday')['score'], journal.POINTS['wait'])
 
 
 if __name__ == '__main__':

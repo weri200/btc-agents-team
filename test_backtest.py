@@ -114,7 +114,7 @@ class BacktestTest(unittest.TestCase):
         self.assertGreater(newest['asOf'], listed['reports'][1]['asOf'])
         self.assertEqual(newest['priceScale'], backtest.scale_of(newest['asOf']))
         swing = newest['horizons']['swing']
-        self.assertEqual((swing['verdict'], swing['status']), ('long', 'hit'))
+        self.assertEqual((swing['verdict'], swing['status'], swing['points']), ('long', 'hit', 1.0))
         self.assertAlmostEqual(swing['return'], swing['exit'] / swing['entry'] - 1)
         self.assertEqual(len(journal.backtests(self.collector.db_path, now=NOW, limit=1)['reports']), 1)
         opened = journal.backtest_report(newest['id'], self.collector.db_path, now=NOW)
