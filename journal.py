@@ -44,33 +44,44 @@ def close_at(db, symbol, interval, at):
     return float(json.loads(row[0])['close']) if row else None
 
 
+def outcome(db, symbol, as_of, horizon, verdict, now):
+    """How one call came out: wait, pending, missing, or hit/miss with the entry and exit closes and the signed return."""
+    if verdict == 'wait':
+        return {'status': 'wait'}
+    interval, hold = HOLDS[horizon]
+    if as_of + hold > now:
+        return {'status': 'pending'}
+    entry, exit_ = close_at(db, symbol, interval, as_of), close_at(db, symbol, interval, as_of + hold)
+    if entry is None or exit_ is None:
+        return {'status': 'missing'}  # The server was not collecting then; the call cannot be scored.
+    ret = (exit_ / entry - 1) * (1 if verdict == 'long' else -1)
+    return {'status': 'hit' if ret > 0 else 'miss', 'entry': entry, 'exit': exit_, 'return': ret}
+
+
+def ensure_candles(db):
+    db.execute('CREATE TABLE IF NOT EXISTS candles (symbol TEXT, interval TEXT, open_time INTEGER, payload TEXT, PRIMARY KEY(symbol,interval,open_time))')
+
+
 def scores(path=DB, now=None):
     """Per mode (live analysis or backtest), prompt version, horizon and role: call counts, and hit rate and mean return of long/short calls."""
     now = now or int(datetime.now().timestamp() * 1000)
     groups = {}
     with closing(connect(path)) as db:
-        db.execute('CREATE TABLE IF NOT EXISTS candles (symbol TEXT, interval TEXT, open_time INTEGER, payload TEXT, PRIMARY KEY(symbol,interval,open_time))')
+        ensure_candles(db)
         query = 'SELECT r.symbol, r.as_of, r.mode, r.prompt_version, v.horizon, v.role, v.verdict FROM verdicts v JOIN reports r ON r.id = v.report_id'
         for symbol, as_of, mode, version, horizon, role, verdict in db.execute(query).fetchall():
-            interval, hold = HOLDS[horizon]
             g = groups.setdefault((mode, version, horizon, role), {'mode': mode, 'promptVersion': version, 'horizon': horizon, 'role': role,
                                                              'calls': 0, 'long': 0, 'short': 0, 'wait': 0,
                                                              'pending': 0, 'missing': 0, 'scored': 0, 'hits': 0, 'returns': []})
             g['calls'] += 1
             g[verdict] += 1
-            if verdict == 'wait':
-                continue
-            if as_of + hold > now:
-                g['pending'] += 1
-                continue
-            entry, exit_ = close_at(db, symbol, interval, as_of), close_at(db, symbol, interval, as_of + hold)
-            if entry is None or exit_ is None:
-                g['missing'] += 1  # The server was not collecting then; the call cannot be scored.
-                continue
-            ret = (exit_ / entry - 1) * (1 if verdict == 'long' else -1)
-            g['scored'] += 1
-            g['hits'] += ret > 0
-            g['returns'].append(ret)
+            result = outcome(db, symbol, as_of, horizon, verdict, now)
+            if result['status'] in ('pending', 'missing'):
+                g[result['status']] += 1
+            elif result['status'] != 'wait':
+                g['scored'] += 1
+                g['hits'] += result['status'] == 'hit'
+                g['returns'].append(result['return'])
     result = []
     for g in groups.values():
         returns = g.pop('returns')
@@ -79,3 +90,36 @@ def scores(path=DB, now=None):
         g['meanReturnPct'] = sum(returns) / len(returns) * 100 if returns else None
         result.append(g)
     return sorted(result, key=lambda g: (g['mode'], g['promptVersion'], g['horizon'], g['role'] != 'judge', g['role']))
+
+
+def backtests(path=DB, now=None, limit=100):
+    """Newest backtest reports with each horizon's judge call and how it came out."""
+    # shortcut: only the newest `limit` are listed; add paging if people need to browse further back.
+    now = now or int(datetime.now().timestamp() * 1000)
+    with closing(connect(path)) as db:
+        ensure_candles(db)
+        total = db.execute("SELECT count(*) FROM reports WHERE mode='backtest'").fetchone()[0]
+        rows = db.execute("""SELECT r.id, r.symbol, r.as_of, r.prompt_version, json_extract(r.payload, '$.priceScale'), v.horizon, v.verdict
+                             FROM (SELECT * FROM reports WHERE mode='backtest' ORDER BY as_of DESC, id LIMIT ?) r
+                             JOIN verdicts v ON v.report_id = r.id AND v.role = 'judge' ORDER BY r.as_of DESC, r.id""", (limit,)).fetchall()
+        reports = {}
+        for rid, symbol, as_of, version, scale, horizon, verdict in rows:
+            entry = reports.setdefault(rid, {'id': rid, 'symbol': symbol, 'asOf': as_of, 'promptVersion': version,
+                                             'priceScale': scale, 'horizons': {}})
+            entry['horizons'][horizon] = {'verdict': verdict, **outcome(db, symbol, as_of, horizon, verdict, now)}
+    return {'total': total, 'reports': list(reports.values())}
+
+
+def backtest_report(report_id, path=DB, now=None):
+    """One saved backtest report, each horizon carrying how its judge call came out; None if there is no such backtest."""
+    now = now or int(datetime.now().timestamp() * 1000)
+    with closing(connect(path)) as db:
+        ensure_candles(db)
+        row = db.execute("SELECT symbol, as_of, payload FROM reports WHERE id=? AND mode='backtest'", (report_id,)).fetchone()
+        if not row:
+            return None
+        symbol, as_of, payload = row
+        report = json.loads(payload)
+        for horizon, data in report['horizons'].items():
+            data['outcome'] = outcome(db, symbol, as_of, horizon, data['verdict'], now)
+    return report

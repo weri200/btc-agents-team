@@ -105,6 +105,25 @@ class BacktestTest(unittest.TestCase):
         technical = next(g for g in groups if g['role'] == 'technical' and g['horizon'] == 'intraday')
         self.assertEqual((technical['scored'], technical['hits']), (3, 0))
 
+    def test_listing_and_one_report_carry_outcomes(self):
+        self.run_backtest(limit=2)
+        journal.save_report({**report({'serverTime': NOW - 100 * H, 'symbol': 'BTCUSDT'}, {}), 'id': 'live'}, self.collector.db_path)
+        listed = journal.backtests(self.collector.db_path, now=NOW)
+        self.assertEqual(listed['total'], 2)  # the live report is left out
+        newest = listed['reports'][0]
+        self.assertGreater(newest['asOf'], listed['reports'][1]['asOf'])
+        self.assertEqual(newest['priceScale'], backtest.scale_of(newest['asOf']))
+        swing = newest['horizons']['swing']
+        self.assertEqual((swing['verdict'], swing['status']), ('long', 'hit'))
+        self.assertAlmostEqual(swing['return'], swing['exit'] / swing['entry'] - 1)
+        self.assertEqual(len(journal.backtests(self.collector.db_path, now=NOW, limit=1)['reports']), 1)
+        opened = journal.backtest_report(newest['id'], self.collector.db_path, now=NOW)
+        self.assertEqual(opened['mode'], 'backtest')
+        self.assertEqual(opened['horizons']['swing']['outcome']['status'], 'hit')
+        self.assertIsNone(journal.backtest_report('live', self.collector.db_path))
+        self.assertEqual(journal.backtest_report(newest['id'], self.collector.db_path, now=newest['asOf'] + H)['horizons']['swing']['outcome'],
+                         {'status': 'pending'})
+
     def test_rerun_skips_moments_already_done(self):
         self.run_backtest(limit=2)
         saved, _ = self.run_backtest(limit=2)

@@ -146,5 +146,26 @@ console.log('Passed: sidebar collapse and expansion with accessible state.');
   vm.runInContext(source,offline);await vm.runInContext('loadScores()',offline);
   assert.match(node('#scores').innerHTML,/불러오지 못했습니다/);
   console.log('Passed: verdict scores table, escaping, unscored rows, and server error.');
+  const saved=Object.assign(model.demo(),{id:'bt-1',mode:'backtest',priceScale:1.8928});
+  saved.horizons.intraday.outcome={status:'hit',entry:100,exit:101,return:0.01};saved.horizons.swing.outcome={status:'wait'};
+  const listed={total:3,reports:[{id:'bt-1',symbol:'BTCUSDT',asOf:1792800000000,promptVersion:'v<6>',priceScale:1.8928,
+    horizons:{intraday:{verdict:'short',status:'miss',entry:100,exit:101,return:-0.0123},swing:{verdict:'wait',status:'wait'}}}]};
+  const urls=[];
+  const back=vm.createContext({...context,fetch:async url=>{urls.push(url);return {ok:true,json:async()=>url.includes('id=')?saved:listed}}});
+  vm.runInContext(source,back);await vm.runInContext('loadBacktests()',back);
+  const rows=node('#backtests').innerHTML;
+  assert.match(rows,/v&lt;6&gt;/);assert.match(rows,/빗나감 -1\.23%/);assert.match(rows,/채점 안 함/);assert.match(rows,/×1\.8928/);assert.match(rows,/data-backtest="bt-1"/);
+  assert.match(node('#backtests-note').textContent,/최근 1건 \/ 전체 3건/);
+  await vm.runInContext("openBacktest('bt 1')",back);
+  assert.equal(urls.at(-1),'/api/backtests?id=bt%201');
+  assert.match(node('#notice-title').textContent,/백테스트 보고서/);
+  assert.match(node('#notice-text').textContent,/×1\.8928/);assert.match(node('#notice-text').textContent,/단타 \S+ 적중 \+1\.00%/);
+  assert.equal(node('#source-badge').textContent,'백테스트');
+  assert.match(node('#horizons').innerHTML,/적중 \+1\.00%/);
+  assert.equal(vm.runInContext('history.length',back),0);  // Opening a backtest does not add it to this browser's history.
+  const empty=vm.createContext({...context,fetch:async()=>({ok:true,json:async()=>({total:0,reports:[]})})});
+  vm.runInContext(source,empty);await vm.runInContext('loadBacktests()',empty);
+  assert.match(node('#backtests').innerHTML,/python backtest\.py/);
+  console.log('Passed: backtest table, outcomes, opening one backtest report with its scale notice.');
  }
 })().catch(e=>{console.error(e);process.exit(1)});

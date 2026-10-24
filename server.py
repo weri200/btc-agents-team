@@ -54,6 +54,14 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == '/api/scores':
             return self.json_response(200, {'holds': {h: {'interval': i, 'hours': ms // 3600000} for h, (i, ms) in journal.HOLDS.items()},
                                             'groups': journal.scores(collector.db_path)})
+        if parsed.path == '/api/backtests':
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            if not query:
+                return self.json_response(200, journal.backtests(collector.db_path))
+            if set(query) != {'id'} or len(query['id']) != 1 or not 0 < len(query['id'][0]) <= 64:
+                return self.json_response(400, {'error': '백테스트 보고서 id 하나를 지정하세요.'})
+            report = journal.backtest_report(query['id'][0], collector.db_path)
+            return self.json_response(200, report) if report else self.json_response(404, {'error': '백테스트 보고서를 찾을 수 없습니다.'})
         if parsed.path == '/api/market':
             origin = self.headers.get('Origin')
             if origin and origin not in {'http://' + host for host in hosts}:
