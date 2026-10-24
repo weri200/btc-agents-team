@@ -53,6 +53,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.json_response(200, report) if report else self.json_response(404, {'error': '아직 완료된 분석이 없습니다.'})
         if parsed.path == '/api/scores':
             return self.json_response(200, {'holds': {h: {'interval': i, 'hours': ms // 3600000} for h, (i, ms) in journal.HOLDS.items()},
+                                            'brackets': {h: {'target': tp, 'stop': sl} for h, (tp, sl) in journal.BRACKETS.items()},
                                             'points': journal.POINTS,
                                             'rules': journal.rule_scores(collector.db_path),
                                             'ruleLabels': {k: label for k, (label, _) in journal.RULES.items()},

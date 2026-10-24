@@ -45,8 +45,9 @@ def day_csv(day):
 def report(snapshot, config):
     def horizon():
         return {'verdict': 'long', 'agents': [{'id': 'technical', 'verdict': 'short'}]}
+    # An ATR of 1 in the scaled prices the models saw: a few hours of the steady climb reach the swing target.
     return {'id': f"r{snapshot['serverTime']}", 'symbol': snapshot['symbol'], 'asOf': market.iso(snapshot['serverTime']),
-            'mode': 'analysis', 'promptVersion': 'v-test', 'horizons': {'intraday': horizon(), 'swing': horizon()}}
+            'mode': 'analysis', 'promptVersion': 'v-test', 'facts': {'4h.atr14': 1.0}, 'horizons': {'intraday': horizon(), 'swing': horizon()}}
 
 
 class BacktestTest(unittest.TestCase):
@@ -71,7 +72,7 @@ class BacktestTest(unittest.TestCase):
         moments = backtest.moments(NOW, 4 * H, 10)
         self.assertTrue(all(m % backtest.STEP == 0 for m in moments))
         self.assertEqual(moments, sorted(moments, reverse=True))
-        self.assertLessEqual(moments[0], NOW - 72 * H)
+        self.assertLessEqual(moments[0], NOW - 7 * 24 * H)  # the swing hold is over
         self.assertGreater(moments[-1], NOW - 10 * 24 * H)
 
     def test_scale_is_repeatable_and_far_from_one(self):

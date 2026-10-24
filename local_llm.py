@@ -20,7 +20,7 @@ ROLES = {'technical': '기술 분석가', 'derivatives': '파생상품 분석가
 OPTIONAL_ROLES = {'macro'}  # Without it (or without OpenBB data) the macro seat stays a fixed wait.
 HORIZONS = {'intraday': ('단타', '5분 · 15분 · 1시간', ('5m', '15m', '1h')),
             'swing': ('스윙', '4시간 · 1일', ('4h', '1d'))}
-PROMPT_VERSION = 'local-team-v5'
+PROMPT_VERSION = 'local-team-v6'
 RETRY_DELAY = 5
 TIMINGS = Path(__file__).resolve().parent / 'data' / 'llm_timings.json'
 DEFAULT_EXPECTED_MS = 60000
@@ -275,10 +275,11 @@ COMMON = ('모든 문장은 반드시 한국어로 씁니다. 영어 문장을 �
           '근거가 부족하거나 지표가 엇갈리면 wait. 확률, 목표가, 수익 보장, 주문 지시를 하지 마세요. 문장은 80자 이내로 씁니다.')
 ROLE_PROMPTS = {
     'technical': ('역할: 기술 분석가. 이동평균 대비 위치, RSI, ATR, 변화율, 20봉 고저, 거래량 비율로 추세와 모멘텀을 판단합니다. '
-                  # Time-series momentum and trend following (Moskowitz-Ooi-Pedersen 2012, Turtle rules).
-                  '스윙은 시계열 모멘텀·추세추종으로 판단합니다. 1d 20기간 변화율의 방향과 1d 종가의 SMA200·SMA50 대비 위치가 같은 쪽이면 그 방향, '
-                  '엇갈리면 wait입니다. 4h는 진입 시점 확인용이며 1d 방향을 뒤집지 않습니다. RSI 과매수·과매도만으로 추세에 반대하지 마세요. '
-                  '스윙 invalidation은 롱이면 20봉 저점 이탈, 숏이면 20봉 고점 돌파로 씁니다. ATR 비율이 높으면 counter에 변동성 위험을 적습니다. '
+                  # The 'breakout-volume' rule in research.py: the steadiest one-position-at-a-time result on BTC, ETH and SOL over two years.
+                  '스윙은 1d 추세 방향의 4h 거래량 돌파로 판단합니다. 1d 20기간 변화율의 방향과 1d 종가의 SMA50 대비 위치가 같은 쪽일 때 그 방향만 봅니다. 엇갈리면 wait입니다. '
+                  '그 방향으로 4h 종가가 직전 20봉 고점 위로 돌파(롱) 또는 저점 아래로 이탈(숏)하고 4h 거래량이 평소보다 많을 때만 long 또는 short이고, 돌파가 없거나 거래량이 평소 수준 이하면 wait입니다. '
+                  'RSI 과매수·과매도만으로 추세에 반대하지 마세요. '
+                  '스윙 invalidation은 진입 뒤 가격이 4h ATR 한 배만큼 반대로 움직이는 것으로 씁니다. ATR 비율이 높으면 counter에 변동성 위험을 적습니다. '
                   # Intraday: higher-timeframe alignment plus volume-confirmed range breakout.
                   '단타는 1h 20기간 변화율의 방향과 1h 종가의 SMA50 대비 위치가 같은 쪽일 때 그 방향만 봅니다. 엇갈리거나 5m·15m 신호가 1h와 반대면 wait입니다. '
                   '그 방향으로 15m 종가가 직전 20봉 고점 위로 돌파(롱) 또는 저점 아래로 이탈(숏)하고 15m 거래량이 평소보다 많을 때만 long 또는 short이고, 돌파가 없거나 거래량이 평소 수준 이하면 wait입니다. '

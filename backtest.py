@@ -157,8 +157,9 @@ def masked(snapshot, scale):
 
 
 def exit_bars(collector, symbol, at):
-    """The bar each horizon is scored on, so scores() finds it without the live collector."""
-    return {interval: bars_before(collector, at + hold, interval, 1, symbol=symbol) for interval, hold in journal.HOLDS.values()}
+    """Every bar of each horizon's hold, so scores() can follow a target and stop without the live collector."""
+    return {interval: bars_before(collector, at + hold, interval, hold // INTERVALS[interval], symbol=symbol)
+            for interval, hold in journal.HOLDS.values()}
 
 
 def moments(now, every, days):
