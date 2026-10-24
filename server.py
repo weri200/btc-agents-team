@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from market import Collector, MarketError
+import journal
 import local_llm
 import macro
 
@@ -50,6 +51,9 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == '/api/last-report':
             report = local_llm.progress.last_report
             return self.json_response(200, report) if report else self.json_response(404, {'error': '아직 완료된 분석이 없습니다.'})
+        if parsed.path == '/api/scores':
+            return self.json_response(200, {'holds': {h: {'interval': i, 'hours': ms // 3600000} for h, (i, ms) in journal.HOLDS.items()},
+                                            'groups': journal.scores(collector.db_path)})
         if parsed.path == '/api/market':
             origin = self.headers.get('Origin')
             if origin and origin not in {'http://' + host for host in hosts}:
@@ -104,6 +108,11 @@ class Handler(SimpleHTTPRequestHandler):
                     # Macro context is optional: the rest of the team still runs and the seat reports why.
                     snapshot['macro'] = {'error': str(exc)}
             result = local_llm.analyze(snapshot, config)
+            try:
+                journal.save_report(result, collector.db_path)
+            except Exception as exc:
+                # A journal failure must not hide a finished analysis; the report is still shown.
+                self.log_error('journal save failed: %r', exc)
             local_llm.progress.finish(report=result)
             return self.json_response(200, result)
         except (local_llm.AnalysisError, MarketError) as exc:

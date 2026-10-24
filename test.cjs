@@ -22,10 +22,10 @@ for(const saved of [null,'dark','light','invalid']){
 }
 assert.doesNotThrow(()=>vm.runInNewContext(themeSource,{matchMedia:()=>({matches:false,addEventListener(){}}),localStorage:{getItem(){throw Error('blocked')}},document:{documentElement:{dataset:{}},getElementById:()=>null,addEventListener(){}}}));
 console.log('Passed: theme preference, system default, toggle, persistence, and unavailable storage.');
-const element=()=>({children:[],style:{setProperty(k,v){this[k]=v}},append(...nodes){this.children.push(...nodes)},replaceChildren(...nodes){this.children=nodes}});
+const element=()=>({children:[],style:{setProperty(k,v){this[k]=v}},setAttribute(k,v){this[k]=v},append(...nodes){this.children.push(...nodes)},replaceChildren(...nodes){this.children=nodes}});
 const chartNodes={'market-chart':element(),'chart-symbol':{value:'BTCUSDT'},'chart-link':{},'chart-retry':{},'chart-studies':Object.assign(element(),{closest:()=>menu}),'chart-study-count':{},'chart-studies-reset':{}};
 let closeMenu,outsideClick;const menu={open:true,contains:n=>n==='inside',classList:{toggle(){}},getBoundingClientRect:()=>({right:500}),addEventListener(_,fn){closeMenu=fn}};
-const chartStore={'futures-desk-studies':JSON.stringify(['STD;RSI','bogus'])};
+const chartStore={'futures-desk-studies':JSON.stringify(['STD;RSI','bogus']),'futures-desk-study-inputs':JSON.stringify({'STD;RSI':{length:7},'STD;SMA':{length:0},'STD;MACD':{length:5}})};
 let themeChanged;
 const chartRoot={dataset:{theme:'dark'}};
 vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'dist/chart.js'),'utf8'),{localStorage:{getItem:k=>chartStore[k]??null,setItem:(k,v)=>{chartStore[k]=v}},document:{getElementById:id=>chartNodes[id],createElement:element,documentElement:chartRoot,addEventListener(_,fn){outsideClick=fn},createTextNode:t=>({textContent:t})},MutationObserver:class{constructor(fn){themeChanged=fn}observe(){}}});
@@ -37,7 +37,8 @@ chartRoot.dataset.theme='light';themeChanged();assert.equal(chartConfig().theme,
 const sameTheme=chartNodes['market-chart'].children[0];themeChanged();assert.equal(chartNodes['market-chart'].children[0],sameTheme);
 chartNodes['market-chart'].children[0].children[2].onerror();assert.match(chartNodes['market-chart'].children[0].children[0].textContent,/네트워크/);
 chartNodes['chart-retry'].onclick();assert.equal(chartNodes['market-chart'].children.length,1);
-assert.deepEqual(chartConfig().studies,['STD;RSI']);assert.equal(chartConfig().hide_top_toolbar,false);
+// Saved settings switch a study to the legacy id the widget applies inputs under; invalid or unsupported ones are dropped.
+assert.deepEqual(chartConfig().studies,[{id:'RSI@tv-basicstudies',inputs:{length:7}}]);assert.equal(chartConfig().hide_top_toolbar,false);
 assert.equal(chartNodes['chart-study-count'].textContent,'지표 1');
 const macd=chartNodes['chart-studies'].children.find(l=>l.children[0].value==='STD;MACD').children[0];
 const beforeClose=chartNodes['market-chart'].children[0];macd.checked=true;macd.onchange();
@@ -45,7 +46,18 @@ const beforeClose=chartNodes['market-chart'].children[0];macd.checked=true;macd.
 assert.equal(chartNodes['market-chart'].children[0],beforeClose);
 outsideClick({target:'inside'});assert.equal(menu.open,true);
 outsideClick({target:'outside'});assert.equal(menu.open,false);closeMenu();
-assert.deepEqual(chartConfig().studies,['STD;RSI','STD;MACD']);assert.equal(chartNodes['market-chart'].style['--study-panes'],2);assert.equal(chartStore['futures-desk-studies'],'["STD;RSI","STD;MACD"]');
+assert.deepEqual(chartConfig().studies,[{id:'RSI@tv-basicstudies',inputs:{length:7}},{id:'STD;MACD'}]);assert.equal(chartNodes['market-chart'].style['--study-panes'],2);assert.equal(chartStore['futures-desk-studies'],'["STD;RSI","STD;MACD"]');
 const afterMacd=chartNodes['market-chart'].children[0];closeMenu();assert.equal(chartNodes['market-chart'].children[0],afterMacd);
+const row=id=>chartNodes['chart-studies'].children.find(l=>l.children[0].value===id);
+assert.equal(row('STD;MACD').children.length,2);  // No settings box where the widget ignores inputs.
+const [kcLength,kcMult]=row('STD;Keltner_Channels').children[2].children;
+kcLength.value='30';kcLength.onchange();kcMult.value='1.5';kcMult.onchange();
+assert.deepEqual(JSON.parse(chartStore['futures-desk-study-inputs'])['STD;Keltner_Channels'],{length:30,multiplier:1.5});
+kcLength.value='2.5';kcLength.onchange();assert.equal(kcLength.value,30);  // A fractional length is refused and the last value restored.
+kcMult.value='';kcMult.onchange();assert.deepEqual(JSON.parse(chartStore['futures-desk-study-inputs'])['STD;Keltner_Channels'],{length:30});
+const rsiLength=row('STD;RSI').children[2].children[0];assert.equal(rsiLength.value,7);
+rsiLength.value='21';rsiLength.onchange();closeMenu();
+assert.deepEqual(chartConfig().studies,[{id:'RSI@tv-basicstudies',inputs:{length:21}},{id:'STD;MACD'}]);
+rsiLength.value='';rsiLength.onchange();closeMenu();assert.deepEqual(chartConfig().studies,[{id:'STD;RSI'},{id:'STD;MACD'}]);
 chartNodes['chart-studies-reset'].onclick();closeMenu();assert.deepEqual(chartConfig().studies,[]);assert.equal(chartNodes['chart-study-count'].textContent,'지표');
-console.log('Passed: chart symbol, default interval, theme sync, error fallback, and retry.');
+console.log('Passed: chart symbol, default interval, theme sync, error fallback, retry, and saved study settings.');

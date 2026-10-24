@@ -244,10 +244,14 @@ class ServerTests(unittest.TestCase):
                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}), \
                 patch.object(server.collector, 'derivatives', return_value={}), \
                 patch.object(server.macro, 'collect', return_value={}), \
-                patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}):
+                patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}),                 patch.object(server.journal, 'save_report') as save:
             status, body = self.post()
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(body)['id'], 'test')
+            save.assert_called_once_with({'id': 'test'}, server.collector.db_path)
+        # A journal that cannot save still returns the finished report.
+        with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}),                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}),                 patch.object(server.collector, 'derivatives', return_value={}),                 patch.object(server.macro, 'collect', return_value={}),                 patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}),                 patch.object(server.journal, 'save_report', side_effect=sqlite3.OperationalError('locked')):
+            self.assertEqual(self.post()[0], 200)
         with patch.object(server.local_llm, 'status', side_effect=server.local_llm.AnalysisError('offline')):
             self.assertEqual(self.post()[0], 502)
         self.assertFalse(server.local_llm.lock.locked())
@@ -261,7 +265,7 @@ class ServerTests(unittest.TestCase):
                     patch.object(server.collector, 'collect', return_value={'serverTime': NOW}), \
                     patch.object(server.collector, 'derivatives', return_value={}), \
                     patch.object(server.macro, 'collect', return_value={}), \
-                    patch.object(server.local_llm, 'analyze', return_value={'id': 'done-report'}):
+                    patch.object(server.local_llm, 'analyze', return_value={'id': 'done-report'}),                     patch.object(server.journal, 'save_report'):
                 self.assertEqual(self.post()[0], 200)
             state = json.loads(self.get('/api/progress')[1])
             self.assertEqual((state['state'], state['reportId']), ('done', 'done-report'))
