@@ -9,7 +9,7 @@
   const STUDIES = [
     ['STD;SMA', '이동평균 (SMA)'], ['STD;EMA', '지수이동평균 (EMA)'], ['STD;Bollinger_Bands', '볼린저 밴드'],
     ['STD;VWAP', 'VWAP'], ['STD;RSI', 'RSI'], ['STD;MACD', 'MACD'], ['STD;Stochastic_RSI', '스토캐스틱 RSI'],
-    ['STD;Average_True_Range', 'ATR'], ['STD;Ichimoku_Cloud', '일목균형표'],
+    ['STD;Average_True_Range', 'ATR'], ['STD;Ichimoku%1Cloud', '일목균형표'],
     ['STD;Supertrend', '슈퍼트렌드'], ['STD;PSAR', '파라볼릭 SAR'], ['STD;Donchian_Channels', '돈치안 채널'],
     ['STD;Keltner_Channels', '켈트너 채널'], ['STD;Stochastic', '스토캐스틱'], ['STD;DMI', 'DMI (ADX 포함)'],
     ['STD;CCI', 'CCI'], ['STD;Money_Flow', 'MFI'], ['STD;On_Balance_Volume', 'OBV'], ['STD;Willams_R', '윌리엄스 %R'], // TradingView's own spelling
@@ -21,7 +21,8 @@
   let selected, renderedTheme, renderedStudies;
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
-    selected = Array.isArray(saved) ? saved.filter(id => STUDIES.some(([s]) => s === id)) : [];
+    // Earlier versions saved Ichimoku under a wrong id that TradingView ignores; keep the user's pick.
+    selected = Array.isArray(saved) ? saved.map(id => id === 'STD;Ichimoku_Cloud' ? 'STD;Ichimoku%1Cloud' : id).filter(id => STUDIES.some(([s]) => s === id)) : [];
   } catch { selected = []; }
 
   function showCount() {
