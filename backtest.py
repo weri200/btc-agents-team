@@ -70,8 +70,11 @@ def metrics_day(symbol, day, folder=ARCHIVE):
             at = int(datetime.fromisoformat(parts[0]).replace(tzinfo=timezone.utc).timestamp() * 1000)
         except ValueError as exc:
             raise MarketError(f'{day} 아카이브 시각 형식 오류') from exc
-        for value in parts[2:]:
-            market.number(value, positive=True)
+        try:
+            for value in parts[2:]:
+                market.number(value, positive=True)
+        except MarketError:
+            continue  # the archive has occasional zero rows (e.g. OI value 0E-16 on 2026-10-15); that time counts as missing
         rows[at] = dict(zip(METRIC_COLUMNS, parts))
     return rows
 
@@ -88,11 +91,14 @@ def ratio_row(at, ratio):
     return {'timestamp': at, 'longShortRatio': ratio, 'longAccount': f'{r / (1 + r):.4f}', 'shortAccount': f'{1 / (1 + r):.4f}'}
 
 
-def derivatives_at(collector, symbol, at, candles, folder=ARCHIVE):
-    """The same history the live analysis fetches, as it stood just before `at`.
+def funding_before(collector, symbol, at, limit=market.FUNDING_COUNT):
+    return market.history_rows(collector.request('/fapi/v1/fundingRate', symbol=symbol, limit=limit, endTime=at - 1),
+                               symbol, ('fundingRate',), 'fundingTime', signed=('fundingRate',))
+
+
+def derivatives_at(symbol, at, candles, funding, folder=ARCHIVE):
+    """The same history the live analysis fetches, as it stood just before `at`, given the funding settled before it.
     OI and long/short come from the archive (within about 0.3% of the REST values at 1h); taker ratios from klines, as REST computes them."""
-    funding = market.history_rows(collector.request('/fapi/v1/fundingRate', symbol=symbol, limit=market.FUNDING_COUNT, endTime=at - 1),
-                                  symbol, ('fundingRate',), 'fundingTime', signed=('fundingRate',))
     periods = {}
     for period, step in market.HISTORY_PERIODS.items():
         times = [at - k * step for k in range(market.HISTORY_COUNT, 0, -1)]
@@ -119,7 +125,7 @@ def derivatives_at(collector, symbol, at, candles, folder=ARCHIVE):
 
 def snapshot_at(collector, symbol, at, folder=ARCHIVE):
     candles = {i: bars_before(collector, at, i, symbol=symbol) for i in INTERVALS}
-    derivatives = derivatives_at(collector, symbol, at, candles, folder)
+    derivatives = derivatives_at(symbol, at, candles, funding_before(collector, symbol, at), folder)
     # shortcut: the live snapshot's funding rate is the running period's estimate; here it is the last settled rate.
     return {'symbol': symbol, 'serverTime': at, 'warnings': [], 'candles': candles,
             'ticker': {'price': candles['5m'][-1]['close']},
