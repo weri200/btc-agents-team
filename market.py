@@ -81,18 +81,22 @@ def closed_bars(rows, interval, as_of):
     return bars[-BAR_COUNT:]
 
 
+def save_candles(db, symbol, candles):
+    db.execute('CREATE TABLE IF NOT EXISTS candles (symbol TEXT, interval TEXT, open_time INTEGER, payload TEXT, PRIMARY KEY(symbol,interval,open_time))')
+    for interval, bars in candles.items():
+        db.executemany('INSERT OR REPLACE INTO candles VALUES (?,?,?,?)',
+                       [(symbol, interval, bar['openTime'], json.dumps(bar)) for bar in bars])
+
+
 def save_snapshot(snapshot, path=DB):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     summary = {k: v for k, v in snapshot.items() if k != 'candles'}
     with closing(sqlite3.connect(path)) as db, db:
         db.execute('CREATE TABLE IF NOT EXISTS snapshots (symbol TEXT, collected_at TEXT, payload TEXT, PRIMARY KEY(symbol,collected_at))')
-        db.execute('CREATE TABLE IF NOT EXISTS candles (symbol TEXT, interval TEXT, open_time INTEGER, payload TEXT, PRIMARY KEY(symbol,interval,open_time))')
         db.execute('INSERT OR REPLACE INTO snapshots VALUES (?,?,?)',
                    (snapshot['symbol'], snapshot['collectedAt'], json.dumps(summary, ensure_ascii=False)))
-        for interval, bars in snapshot['candles'].items():
-            db.executemany('INSERT OR REPLACE INTO candles VALUES (?,?,?,?)',
-                           [(snapshot['symbol'], interval, bar['openTime'], json.dumps(bar)) for bar in bars])
+        save_candles(db, snapshot['symbol'], snapshot['candles'])
 
 
 # Positioning history for the derivatives analyst: 1h feeds intraday, 4h feeds swing.

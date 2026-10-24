@@ -16,7 +16,9 @@ def connect(path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path)
-    db.execute('CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, symbol TEXT, as_of INTEGER, prompt_version TEXT, payload TEXT)')
+    db.execute('CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, symbol TEXT, as_of INTEGER, prompt_version TEXT, payload TEXT, mode TEXT)')
+    if 'mode' not in [c[1] for c in db.execute('PRAGMA table_info(reports)')]:
+        db.execute("ALTER TABLE reports ADD COLUMN mode TEXT DEFAULT 'analysis'")  # journals saved before backtests existed
     db.execute('CREATE TABLE IF NOT EXISTS verdicts (report_id TEXT, horizon TEXT, role TEXT, verdict TEXT, PRIMARY KEY(report_id,horizon,role))')
     return db
 
@@ -28,8 +30,9 @@ def save_report(report, path=DB):
         rows.append((report['id'], horizon, 'judge', data['verdict']))
         rows += [(report['id'], horizon, agent['id'], agent['verdict']) for agent in data['agents']]
     with closing(connect(path)) as db, db:
-        db.execute('INSERT OR REPLACE INTO reports VALUES (?,?,?,?,?)',
-                   (report['id'], report['symbol'], as_of, report['promptVersion'], json.dumps(report, ensure_ascii=False)))
+        db.execute('INSERT OR REPLACE INTO reports VALUES (?,?,?,?,?,?)',
+                   (report['id'], report['symbol'], as_of, report['promptVersion'], json.dumps(report, ensure_ascii=False),
+                    report.get('mode', 'analysis')))
         db.executemany('INSERT OR REPLACE INTO verdicts VALUES (?,?,?,?)', rows)
 
 
@@ -42,15 +45,15 @@ def close_at(db, symbol, interval, at):
 
 
 def scores(path=DB, now=None):
-    """Per prompt version, horizon and role: call counts, and hit rate and mean return of long/short calls."""
+    """Per mode (live analysis or backtest), prompt version, horizon and role: call counts, and hit rate and mean return of long/short calls."""
     now = now or int(datetime.now().timestamp() * 1000)
     groups = {}
     with closing(connect(path)) as db:
         db.execute('CREATE TABLE IF NOT EXISTS candles (symbol TEXT, interval TEXT, open_time INTEGER, payload TEXT, PRIMARY KEY(symbol,interval,open_time))')
-        query = 'SELECT r.symbol, r.as_of, r.prompt_version, v.horizon, v.role, v.verdict FROM verdicts v JOIN reports r ON r.id = v.report_id'
-        for symbol, as_of, version, horizon, role, verdict in db.execute(query).fetchall():
+        query = 'SELECT r.symbol, r.as_of, r.mode, r.prompt_version, v.horizon, v.role, v.verdict FROM verdicts v JOIN reports r ON r.id = v.report_id'
+        for symbol, as_of, mode, version, horizon, role, verdict in db.execute(query).fetchall():
             interval, hold = HOLDS[horizon]
-            g = groups.setdefault((version, horizon, role), {'promptVersion': version, 'horizon': horizon, 'role': role,
+            g = groups.setdefault((mode, version, horizon, role), {'mode': mode, 'promptVersion': version, 'horizon': horizon, 'role': role,
                                                              'calls': 0, 'long': 0, 'short': 0, 'wait': 0,
                                                              'pending': 0, 'missing': 0, 'scored': 0, 'hits': 0, 'returns': []})
             g['calls'] += 1
@@ -75,4 +78,4 @@ def scores(path=DB, now=None):
         g['hitRate'] = g['hits'] / g['scored'] if g['scored'] else None
         g['meanReturnPct'] = sum(returns) / len(returns) * 100 if returns else None
         result.append(g)
-    return sorted(result, key=lambda g: (g['promptVersion'], g['horizon'], g['role'] != 'judge', g['role']))
+    return sorted(result, key=lambda g: (g['mode'], g['promptVersion'], g['horizon'], g['role'] != 'judge', g['role']))

@@ -245,6 +245,14 @@ class ProgressTests(unittest.TestCase):
         self.progress.begin('BTCUSDT', CONFIG['roles'])
         self.assertEqual({r['expectedMs'] for r in self.progress.snapshot()['roles']}, {llm.DEFAULT_EXPECTED_MS})
 
+    def test_hidden_date_is_not_sent_but_kept_in_report(self):
+        fake, snapshot = FakeLMStudio(), {**make_snapshot(), 'hideDate': True}
+        with patch.object(llm, 'request', side_effect=fake):
+            report = llm.analyze(snapshot, CONFIG)
+        stamp = llm.iso(snapshot['serverTime'])
+        self.assertTrue(all(sent['asOf'] == '비공개' and stamp not in json.dumps(sent) for _, _, sent in fake.calls))
+        self.assertEqual(report['asOf'], stamp)
+
     def test_analyze_reports_each_role(self):
         seen = []
         with patch.object(llm.progress, 'role', side_effect=lambda r, s, reason=None: seen.append((r, s))),                 patch.object(llm, 'request', side_effect=FakeLMStudio()):
