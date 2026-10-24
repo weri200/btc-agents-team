@@ -136,5 +136,15 @@ console.log('Passed: sidebar collapse and expansion with accessible state.');
   vm.runInContext(source,other);
   assert.equal(vm.runInContext('history.map(r=>r.symbol).join()',other),'BTCUSDT,ETHUSDT');
   console.log('Passed: one invalid saved report does not erase the rest of the history.');
+  const group={promptVersion:'v<5>',horizon:'swing',role:'judge',calls:4,long:2,short:1,wait:1,pending:1,missing:0,scored:2,hits:1,waitRate:0.25,hitRate:0.5,meanReturnPct:1.234};
+  const scored=vm.createContext({...context,fetch:async()=>({ok:true,json:async()=>({holds:{intraday:{hours:4},swing:{hours:72}},groups:[group,{...group,role:'technical',scored:0,hitRate:null,meanReturnPct:null}]})})});
+  vm.runInContext(source,scored);await vm.runInContext('loadScores()',scored);
+  const table=node('#scores').innerHTML;
+  assert.match(table,/v&lt;5&gt;/);assert.match(table,/종합 판정자/);assert.match(table,/2 · 1 · 1/);assert.match(table,/50%/);assert.match(table,/\+1\.23%/);assert.match(table,/—/);
+  assert.match(node('#scores-note').textContent,/72시간/);
+  const offline=vm.createContext({...context,fetch:async()=>({ok:false,json:async()=>({})})});
+  vm.runInContext(source,offline);await vm.runInContext('loadScores()',offline);
+  assert.match(node('#scores').innerHTML,/불러오지 못했습니다/);
+  console.log('Passed: verdict scores table, escaping, unscored rows, and server error.');
  }
 })().catch(e=>{console.error(e);process.exit(1)});
