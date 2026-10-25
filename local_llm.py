@@ -331,13 +331,13 @@ def analyze(snapshot, config=None):
             progress.role('explainer', 'failed', str(exc))
             warnings.append(f'{exc} 판정은 코드가 낸 그대로입니다.')
 
+    # The rule reads Binance candles only; macro and news went to the explainer, so they are listed under its review.
     sources = [{'title': 'Binance 공개 API 스냅샷 · 서버 계산 지표 · 코드 규칙 판정', 'url': None, 'asOf': stamp}]
+
     def when(n):
         return n['time'] + ('T00:00:00+00:00' if len(n['time']) == 10 else '')
-    if explained and macro.get('facts'):
-        sources.append({'title': macro_sources_title(macro), 'url': None, 'asOf': stamp})
-    if explained:
-        sources += [{'title': f"{n['publisher']} · {n['title']}"[:200], 'url': n['url'], 'asOf': when(n)} for n in list(news.values())[:10]]  # the page takes at most 12 sources
+    read = ([{'title': macro_sources_title(macro), 'url': None, 'asOf': stamp}] if macro.get('facts') else []) + \
+        [{'title': f"{n['publisher']} · {n['title']}"[:200], 'url': n['url'], 'asOf': when(n)} for n in news.values()]
     horizons = {}
     for h, (label, frames, _) in HORIZONS.items():
         call, text = calls[h], explained.get(h)
@@ -358,7 +358,8 @@ def analyze(snapshot, config=None):
                        'review': {'caution': text['caution'],
                                   'checks': [{**{k: c[k] for k in ('category', 'finding', 'effect')},
                                               'news': [{**{k: news[i][k] for k in ('publisher', 'title', 'url')}, 'time': when(news[i])}
-                                                       for i in dict.fromkeys(c['news'])]} for c in text['review']]} if text else None}
+                                                       for i in dict.fromkeys(c['news'])]} for c in text['review']],
+                                  'sources': read} if text else None}
     return {'schemaVersion': 1, 'id': str(uuid.uuid4()), 'exchange': 'Binance', 'market': 'USDⓈ-M perpetual',
             'symbol': snapshot['symbol'], 'asOf': stamp, 'mode': 'analysis', 'promptVersion': signals.VERSION,
             'origin': 'local-llm', 'warnings': list(dict.fromkeys(warnings)), 'facts': facts, 'horizons': horizons}

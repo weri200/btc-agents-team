@@ -77,7 +77,7 @@ class AnalyzeTests(unittest.TestCase):
         self.assertTrue(all(k.split('.')[0] in ('market', '4h', '1d') for k in sent['horizons']['swing']['facts']))
         self.assertNotIn('verdict', json.dumps(llm.schema(['news-1'])))  # the model has no field to make a call in
         self.assertEqual(report['horizons']['swing']['review'], {'caution': '보통', 'checks': [
-            {'category': '뉴스', 'finding': 'ETF 자금 유출 기사가 이어져 하락 압력이 남아 있습니다.', 'effect': '하락 요인', 'news': []}]})
+            {'category': '뉴스', 'finding': 'ETF 자금 유출 기사가 이어져 하락 압력이 남아 있습니다.', 'effect': '하락 요인', 'news': []}], 'sources': []})
         self.assertEqual(fake.calls[0]['reasoning_effort'], 'none')
         self.assertEqual((report['promptVersion'], report['origin']), (signals.VERSION, 'local-llm'))
         self.assertIn('시각 주의', report['warnings'])
@@ -146,18 +146,22 @@ class AnalyzeTests(unittest.TestCase):
         check = report['horizons']['swing']['review']['checks'][0]
         self.assertEqual(check['news'], [{'publisher': 'CoinDesk', 'title': 'Bitcoin slides on ETF outflows',
                                           'url': 'https://www.coindesk.com/x', 'time': '2026-05-27T22:10+00:00'}])
-        sources = report['horizons']['swing']['agents'][0]['sources']
-        self.assertIn('2026-05-27', sources[1]['title'])
-        self.assertEqual([s['url'] for s in sources[2:]], ['https://www.coindesk.com/x', 'https://www.nasdaq.com/a'])
-        self.assertEqual(sources[3]['asOf'], '2026-05-27T00:00:00+00:00')
+        # The rule card lists only what the rule read; macro and news are listed under the AI review that read them.
+        self.assertEqual([s['title'] for s in report['horizons']['swing']['agents'][0]['sources']],
+                         ['Binance 공개 API 스냅샷 · 서버 계산 지표 · 코드 규칙 판정'])
+        read = report['horizons']['swing']['review']['sources']
+        self.assertIn('2026-05-27', read[0]['title'])
+        self.assertEqual([s['url'] for s in read[1:]], ['https://www.coindesk.com/x', 'https://www.nasdaq.com/a'])
+        self.assertEqual(read[2]['asOf'], '2026-05-27T00:00:00+00:00')
         self.assertIn('거시 주의', report['warnings'])
         self.assertIn('Decrypt 뉴스를 받지 못했습니다(URLError).', report['warnings'])
 
-    def test_sources_stay_within_what_the_page_accepts(self):
+    def test_every_news_item_read_is_listed_under_the_review(self):
         self.snapshot['macro'] = MACRO
         self.snapshot['news'] = {'items': [{**RSS, 'title': f'headline {i}'} for i in range(15)], 'warnings': []}
         report = self.analyze(FakeLMStudio())
-        self.assertEqual(len(report['horizons']['swing']['agents'][0]['sources']), 12)  # dist/model.js allows 1 to 12
+        self.assertEqual(len(report['horizons']['swing']['agents'][0]['sources']), 1)
+        self.assertEqual(len(report['horizons']['swing']['review']['sources']), 17)  # OpenBB, 15 RSS and 1 OpenBB headline; the page takes up to 40
 
     def test_a_made_up_news_id_drops_the_explanation(self):
         self.snapshot['news'] = {'items': [RSS], 'warnings': []}

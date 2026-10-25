@@ -44,6 +44,18 @@
       ],
       "review": {
         "caution": "보통",
+        "sources": [
+          {
+            "title": "데모 · 가상 거시 지표",
+            "url": null,
+            "asOf": "2026-10-22T00:00:00+09:00"
+          },
+          {
+            "title": "데모 · 가상 기사",
+            "url": "https://example.com/demo",
+            "asOf": "2026-10-21T09:00:00+09:00"
+          }
+        ],
         "checks": [
           {
             "category": "일정",
