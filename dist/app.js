@@ -81,16 +81,22 @@ $('#file').onchange=async()=>{const f=$('#file').files[0];if(!f)return;try{if(f.
 $('#clear-history').onclick=()=>{if(!history.length){toast('지울 이력이 없습니다.');return}if(confirm('이 브라우저에 보관된 보고서 이력을 지울까요? 원본 파일은 유지됩니다.')){history=[];saveHistory();renderHistory()}};
 // Status reflects what is actually wired up; "제외" tools were replaced by direct implementations.
 const toolStatus={done:['구현됨','long'],next:['다음 단계','wait'],planned:['예정','neutral'],later:['보류','neutral'],dropped:['제외','neutral']};
+// Same rows as README "도구 구성"; change both together.
 $('#integrations').innerHTML=[
- ['Binance API','시세·마크 가격·펀딩·미결제약정·마감 캔들 수집. 분석할 때 펀딩·OI·롱숏·테이커 이력도 받습니다.','done'],
- ['LM Studio','로컬 모델 하나가 코드 규칙의 판정 이유와 규칙 밖의 위험(수급·변동성·뉴스)을 설명합니다. 판정은 바꾸지 않습니다.','done'],
- ['판정 채점','보고서를 저장하고 판정 직전 15분봉 종가에 진입해, 1시간봉으로 4시간 ATR 2배 익절·1배 손절 중 먼저 닿는 쪽(최대 7일)으로 판정 적중을 기록합니다. 과거 시점 백테스트도 같은 기준으로 채점합니다.','done'],
- ['OpenBB','해설 모델에게 미국 국채 금리(Fed), VIX·S&P500(CBOE), 나스닥100·주요 경제 일정·코인 관련 뉴스(Nasdaq)를 제공합니다. API 키가 필요 없는 공급자만 씁니다.','done'],
- ['FRED','CPI·PCE 등 발표 수치를 더 받으려면 무료 API 키가 필요합니다. 키를 넣는 기능은 아직 없습니다.','later'],
- ['Binance 과거 데이터','백테스트용으로 data.binance.vision에서 일별 미결제약정·롱숏 비율을 받아 둡니다.','done'],
- ['NautilusTrader','규칙 판정에 수수료·펀딩·슬리피지·체결 가정을 넣어 백테스트할 때 검토합니다.','later'],
+ ['Binance API','시세·마감 캔들 수집(판정의 유일한 근거). 분석할 때 펀딩·OI·롱숏·테이커 이력도 받아 해설 모델에 넘깁니다.','done'],
+ ['판정 규칙','signals.py. 1일 추세 + 4시간 20봉 돌파 + 거래량 증가로 롱·숏·관망을 코드가 정합니다(rules-v2). 모델은 판정에 관여하지 않습니다.','done'],
+ ['LM Studio','로컬 모델 하나가 판정 이유, 규칙 밖의 위험, AI 정성 점검(일정·뉴스·시장 분위기와 주의 수준)을 씁니다. 참고용이며 판정은 바꾸지 않습니다.','done'],
+ ['코인 뉴스 RSS','news.py. CoinDesk·Cointelegraph·Decrypt 공개 RSS에서 최근 48시간 기사를 분 단위 시각과 함께 받습니다. 신뢰 목록 밖·출처 불분명·협찬·보도자료 기사는 거릅니다.','done'],
+ ['OpenBB','해설 모델용 미국 국채 금리(Fed), VIX·S&P500(CBOE), 나스닥100·주요 경제 일정(Nasdaq). Nasdaq 뉴스도 받지만 같은 신뢰 목록으로 걸러 지금은 대부분 빠집니다. 키 없는 공급자만 씁니다.','done'],
+ ['판정 채점','판정을 저장하고, 직전 15분봉 종가에 진입해 1시간봉으로 4시간 ATR 2배 익절·1배 손절 중 먼저 닿는 쪽(최대 7일)으로 채점합니다.','done'],
+ ['백테스트','4시간 간격 과거 시점의 캔들만으로 같은 규칙을 모델 없이 다시 적용해 실시간과 따로 채점합니다. 시점당 약 0.5초(backtest.py).','done'],
+ ['규칙 연구','규칙 후보를 1시간봉 익절·손절과 수수료로 채점하고 학습·검증 구간을 나눠 비교합니다(research.py).','done'],
+ ['Binance 과거 데이터','data.binance.vision 일별 미결제약정·롱숏 비율(5분)을 받아 둡니다. 지금은 research.py의 수급 규칙 후보만 씁니다.','done'],
+ ['GitHub Actions','PR마다 Python 3.10·Node 22로 전체 테스트를 돌립니다. main은 test 통과가 필수이고, 통과하면 자동 머지합니다.','done'],
+ ['FRED','CPI·PCE 등 발표 수치. 무료 API 키가 필요하며 키를 넣는 기능은 아직 없습니다.','later'],
+ ['NautilusTrader','규칙 판정에 수수료·펀딩·슬리피지·체결 가정을 넣은 백테스트를 할 때 검토합니다.','later'],
  ['CCXT','Binance 직접 호출로 대체했습니다. 여러 거래소 비교나 주문이 필요해지면 다시 검토합니다.','dropped'],
- ['TradingAgents','여러 모델이 토론해 판정하는 팀 구조는 판정이 규칙을 따르지 않아 폐기했습니다. README의 이전 구조를 참고하세요.','dropped']
+ ['TradingAgents','여러 모델이 토론해 판정하는 구조는 판정이 규칙을 따르지 않아 폐기했습니다. README의 이전 구조를 참고하세요.','dropped']
 ].map(([n,d,s])=>`<div class="integration ${s}"><b>${n}</b><p>${d}</p><span class="tag ${toolStatus[s][1]}">${toolStatus[s][0]}</span></div>`).join('');
 render();
 
