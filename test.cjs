@@ -3,11 +3,12 @@ const {demo,validate,counts}=require('./dist/model.js');
 const clone=()=>JSON.parse(JSON.stringify(demo()));
 assert.equal(validate(demo()).symbol,'BTCUSDT');
 assert.deepEqual(counts(demo().horizons.swing),{long:0,short:1,wait:0});
-for(const mutate of [r=>r.schemaVersion=2,r=>r.asOf='2026-10-22',r=>r.horizons.swing=null,r=>r.horizons.swing.verdict='BUY',r=>r.horizons.swing.agents[0].sources[0].url='javascript:alert(1)',r=>r.horizons.swing.agents.push({...r.horizons.swing.agents[0]}),r=>r.horizons.swing.agents[0].evidence=[],r=>r.symbol='<script>',r=>r.exchange='Other']){const r=clone();mutate(r);assert.throws(()=>validate(r));}
+for(const mutate of [r=>r.schemaVersion=2,r=>r.asOf='2026-10-22',r=>r.horizons.swing=null,r=>r.horizons.swing.verdict='BUY',r=>r.horizons.swing.agents[0].sources[0].url='javascript:alert(1)',r=>r.horizons.swing.agents.push({...r.horizons.swing.agents[0]}),r=>r.horizons.swing.agents[0].evidence=[],r=>r.symbol='<script>',r=>r.exchange='Other',r=>r.horizons.swing.review.checks[1].news[0].url='javascript:alert(1)',r=>r.horizons.swing.review.caution='매우']){const r=clone();mutate(r);assert.throws(()=>validate(r));}
 const r=clone();r.mode='analysis';r.horizons.swing.agents[0].sources[0].url='https://example.com/evidence';assert.equal(validate(r).mode,'analysis');
 // Reports from before rules-v2 also carry an intraday call; it is still checked when present.
+const plain=clone();delete plain.horizons.swing.review;assert.equal(validate(plain).id,plain.id);  // the review is optional
 const older=clone();older.horizons.intraday=clone().horizons.swing;assert.equal(validate(older).id,older.id);older.horizons.intraday.verdict='BUY';assert.throws(()=>validate(older));
-console.log('Passed: demo, vote counts, analysis report, and 9 invalid-input cases.');
+console.log('Passed: demo, vote counts, analysis report, and 11 invalid-input cases.');
 const vm=require('node:vm');
 const themeSource=require('node:fs').readFileSync(require('node:path').join(__dirname,'dist/theme.js'),'utf8');
 for(const saved of [null,'dark','light','invalid']){

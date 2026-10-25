@@ -333,6 +333,12 @@ body.sidebar-collapsed main { margin-left:0; }
 .rule-sources { grid-column:1 / -1; border-top:1px solid var(--line); padding-top:14px; }
 .rule-sources ul { font-size:12px; }
 @media(max-width:600px) { .rule-body { grid-template-columns:1fr; } }
+.review-list { list-style:none; padding:0; margin:16px 0 0; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px calc(var(--gap) * 2); }
+.review-list li { border-top:1px solid var(--line); padding-top:12px; min-width:0; }
+.review-tags { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+.agent .review-list p { margin:0; min-height:0; flex:none; }
+.review-news { font-size:12px; line-height:1.8; margin-top:6px; overflow-wrap:anywhere; }
+@media(max-width:600px) { .review-list { grid-template-columns:1fr; } }
 /* With the team synthesis moved into the judge card, the checklist spans the width with its items side by side. */
 @media(min-width:801px) { .checks { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--gap); } .checks li { margin-top:0; } }
 .chart-studies { position:relative; }

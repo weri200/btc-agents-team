@@ -6,46 +6,11 @@
   "symbol": "BTCUSDT",
   "asOf": "2026-10-22T00:00:00+09:00",
   "mode": "demo",
-  "promptVersion": "demo-v2",
+  "promptVersion": "demo-v3",
   "horizons": {
-    "intraday": {
-      "label": "단타",
-      "timeframes": "5분 · 15분 · 1시간",
-      "rule": "1시간 추세 + 15분 20봉 돌파 + 거래량 증가",
-      "verdict": "wait",
-      "summary": "가정: 1시간 추세는 위지만 15분 돌파가 없어 관망인 예시입니다.",
-      "agreement": "1h 추세: 위 (가정) · 15m 20봉 돌파: 없음 (가정) · 15m 거래량: 평소의 0.8배 (부족, 가정)",
-      "disagreement": "가정: 펀딩이 높아 롱 쏠림이 보이는 예시입니다.",
-      "condition": "진입 뒤 4시간이 지나면 그때 15m 종가로 청산합니다.",
-      "explainer": null,
-      "agents": [
-        {
-          "id": "rule",
-          "name": "규칙 판정",
-          "role": "1시간 추세 + 15분 20봉 돌파 + 거래량 증가",
-          "verdict": "wait",
-          "summary": "가정: 1시간 추세는 위지만 15분 돌파가 없어 관망인 예시입니다.",
-          "evidence": [
-            "1h 추세: 위 (가정)",
-            "15m 20봉 돌파: 없음 (가정)",
-            "15m 거래량: 평소의 0.8배 (부족, 가정)"
-          ],
-          "counter": "가정: 펀딩이 높아 롱 쏠림이 보이는 예시입니다.",
-          "invalidation": "진입 뒤 4시간이 지나면 그때 15m 종가로 청산합니다.",
-          "model": "데모 · 코드 미실행",
-          "sources": [
-            {
-              "title": "화면 설명용 가상 시나리오",
-              "url": null,
-              "asOf": "2026-10-22T00:00:00+09:00"
-            }
-          ]
-        }
-      ]
-    },
     "swing": {
-      "label": "스윙",
-      "timeframes": "4시간 · 1일",
+      "label": "4시간 추세 돌파",
+      "timeframes": "1일 추세 · 4시간 돌파",
       "rule": "1일 추세 + 4시간 20봉 돌파 + 거래량 증가",
       "verdict": "short",
       "summary": "가정: 1일 하락 추세에서 4시간 저점을 거래량과 함께 이탈한 예시입니다.",
@@ -76,7 +41,31 @@
             }
           ]
         }
-      ]
+      ],
+      "review": {
+        "caution": "보통",
+        "checks": [
+          {
+            "category": "일정",
+            "finding": "가정: 이틀 뒤 미국 물가 지표 발표가 예정되어 있어 변동성이 커질 수 있습니다.",
+            "effect": "변동성 확대",
+            "news": []
+          },
+          {
+            "category": "뉴스",
+            "finding": "가정: ETF 자금 유출 기사가 이어지고 있습니다.",
+            "effect": "하락 요인",
+            "news": [
+              {
+                "publisher": "데모",
+                "title": "가상 기사",
+                "url": "https://example.com/demo",
+                "time": "2026-10-21T09:00:00+09:00"
+              }
+            ]
+          }
+        ]
+      }
     }
   }
 }

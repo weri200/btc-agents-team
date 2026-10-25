@@ -24,15 +24,22 @@ def make_snapshot():
 
 class FakeLMStudio:
     """Answers with fixed sentences and keeps what it was sent."""
-    def __init__(self, summary='- 추세는 위지만 거래량이 부족해 관망입니다.,', risk='펀딩이 높아 롱 쏠림이 보입니다.'):
-        self.summary, self.risk, self.calls = summary, risk, []
+    def __init__(self, summary='- 추세는 위지만 거래량이 부족해 관망입니다.,', risk='펀딩이 높아 롱 쏠림이 보입니다.', cite=None):
+        self.summary, self.risk, self.cite, self.calls = summary, risk, cite, []
 
     def __call__(self, path, payload=None):
         self.calls.append(payload)
-        body = {h: {'summary': self.summary, 'risk': self.risk} for h in llm.HORIZONS}
+        # Cite the first news id the schema allows, twice: repeated ids are collapsed in the report.
+        ids = (payload or {}).get('response_format', {}).get('json_schema', {}).get('schema', {}).get('properties', {}) \
+            .get('swing', {}).get('properties', {}).get('review', {}).get('items', {}).get('properties', {}).get('news', {}).get('items', {}).get('enum', [])
+        cited = [ids[0]] * 2 if self.cite is None and ids and ids != ['none'] else (self.cite or [])
+        review = [{'category': '뉴스', 'finding': 'ETF 자금 유출 기사가 이어져 하락 압력이 남아 있습니다.', 'effect': '하락 요인', 'news': cited}]
+        body = {h: {'summary': self.summary, 'risk': self.risk, 'review': review, 'caution': '보통'} for h in llm.HORIZONS}
         return {'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(body, ensure_ascii=False)}}]}
 
 
+RSS = {'time': '2026-05-27T22:10+00:00', 'publisher': 'CoinDesk', 'title': 'Bitcoin slides on ETF outflows', 'excerpt': 'y',
+       'url': 'https://www.coindesk.com/x'}
 MACRO = {'facts': {'macro.vix': 19.03, 'macro.us10yPct': 5.13}, 'dates': {'vix': '2026-05-27'}, 'warnings': ['거시 주의'],
          'calendar': [{'time': '2026-05-28T12:30:00+00:00', 'event': 'CPI', 'status': '예정', 'consensus': '', 'previous': '', 'actual': ''}],
          'news': [{'id': 'news-1', 'date': '2026-05-27', 'title': 'Bitcoin ETF inflows', 'excerpt': 'x', 'publisher': 'Zacks',
@@ -68,7 +75,9 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(list(report['horizons']), ['swing'])  # rules-v2 makes the swing call only
         self.assertEqual(report['horizons']['swing']['label'], '4시간 추세 돌파')
         self.assertTrue(all(k.split('.')[0] in ('market', '4h', '1d') for k in sent['horizons']['swing']['facts']))
-        self.assertNotIn('verdict', json.dumps(llm.SCHEMA))  # the model has no field to make a call in
+        self.assertNotIn('verdict', json.dumps(llm.schema(['news-1'])))  # the model has no field to make a call in
+        self.assertEqual(report['horizons']['swing']['review'], {'caution': '보통', 'checks': [
+            {'category': '뉴스', 'finding': 'ETF 자금 유출 기사가 이어져 하락 압력이 남아 있습니다.', 'effect': '하락 요인', 'news': []}]})
         self.assertEqual(fake.calls[0]['reasoning_effort'], 'none')
         self.assertEqual((report['promptVersion'], report['origin']), (signals.VERSION, 'local-llm'))
         self.assertIn('시각 주의', report['warnings'])
@@ -106,7 +115,7 @@ class AnalyzeTests(unittest.TestCase):
     def test_retries_once(self):
         fake = FakeLMStudio()
         with patch.object(llm, 'request', side_effect=[llm.AnalysisError('busy'), fake('/chat/completions', {})]) as call:
-            llm.chat('model-a', {}, 0.1)
+            llm.chat('model-a', {}, 0.1)  # no news: the review may cite none
         self.assertEqual(call.call_count, 2)
 
     def test_numbers_in_text_flagged(self):
@@ -116,16 +125,38 @@ class AnalyzeTests(unittest.TestCase):
 
     def test_macro_and_news_go_to_the_model_and_sources(self):
         self.snapshot['macro'] = MACRO
+        self.snapshot['news'] = {'items': [RSS], 'warnings': ['Decrypt 뉴스를 받지 못했습니다(URLError).']}
         fake = FakeLMStudio()
         report = self.analyze(fake)
         sent = json.loads(fake.calls[0]['messages'][1]['content'])
-        self.assertEqual(sent['macro']['calendar'][0]['event'], 'CPI')
-        self.assertEqual(sent['macro']['news'][0]['title'], 'Bitcoin ETF inflows')
-        self.assertNotIn('url', sent['macro']['news'][0])
+        self.assertEqual(sent['calendar'][0]['event'], 'CPI')
+        # RSS headlines (with minutes) come first, then OpenBB's date-only ones; links stay on the server.
+        self.assertEqual([(n['id'], n['time'], n['title']) for n in sent['news']],
+                         [('news-1', '2026-05-27T22:10+00:00', 'Bitcoin slides on ETF outflows'), ('news-2', '2026-05-27', 'Bitcoin ETF inflows')])
+        self.assertTrue(all('url' not in n for n in sent['news']))
+        news_ids = fake.calls[0]['response_format']['json_schema']['schema']['properties']['swing']['properties']['review']['items']['properties']['news']
+        self.assertEqual(news_ids['items']['enum'], ['news-1', 'news-2'])
+        check = report['horizons']['swing']['review']['checks'][0]
+        self.assertEqual(check['news'], [{'publisher': 'CoinDesk', 'title': 'Bitcoin slides on ETF outflows',
+                                          'url': 'https://www.coindesk.com/x', 'time': '2026-05-27T22:10+00:00'}])
         sources = report['horizons']['swing']['agents'][0]['sources']
         self.assertIn('2026-05-27', sources[1]['title'])
-        self.assertEqual(sources[2]['url'], 'https://www.nasdaq.com/a')
+        self.assertEqual([s['url'] for s in sources[2:]], ['https://www.coindesk.com/x', 'https://www.nasdaq.com/a'])
+        self.assertEqual(sources[3]['asOf'], '2026-05-27T00:00:00+00:00')
         self.assertIn('거시 주의', report['warnings'])
+        self.assertIn('Decrypt 뉴스를 받지 못했습니다(URLError).', report['warnings'])
+
+    def test_sources_stay_within_what_the_page_accepts(self):
+        self.snapshot['macro'] = MACRO
+        self.snapshot['news'] = {'items': [{**RSS, 'title': f'headline {i}'} for i in range(15)], 'warnings': []}
+        report = self.analyze(FakeLMStudio())
+        self.assertEqual(len(report['horizons']['swing']['agents'][0]['sources']), 12)  # dist/model.js allows 1 to 12
+
+    def test_a_made_up_news_id_drops_the_explanation(self):
+        self.snapshot['news'] = {'items': [RSS], 'warnings': []}
+        report = self.analyze(FakeLMStudio(cite=['news-9']))
+        self.assertIsNone(report['horizons']['swing']['review'])
+        self.assertTrue(any('선택 값' in w for w in report['warnings']))
 
     def test_missing_macro_is_a_warning(self):
         self.snapshot['macro'] = {'error': 'OpenBB 가상환경(.venv)이 없습니다.'}
