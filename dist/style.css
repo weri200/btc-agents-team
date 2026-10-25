@@ -262,12 +262,13 @@ html[data-theme="dark"] {
 .judge-row td { font-weight:600; }
 @media(max-width:1000px) { .market-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:430px) { .market-grid { grid-template-columns:1fr; } }
-.chart-opinion-grid { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr); gap:var(--gap); align-items:stretch; margin-bottom:var(--gap); }
+/* The opinion panel sits above the chart, right under the analysis card, so the chart has the row to itself. */
+.chart-opinion-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:var(--gap); margin-bottom:var(--gap); }
 .chart-opinion-grid .chart-panel { margin-bottom:0; min-width:0; }
-.opinion-panel { min-width:0; display:flex; flex-direction:column; }
+.opinion-panel { min-width:0; display:flex; flex-direction:column; margin-bottom:var(--gap); }
 .opinion-panel > h2 { font-size:20px; }
 .opinion-panel > .footnote { margin:8px 0 0; color:var(--amber); }
-.opinion-panel .toolbar { flex-direction:column; align-items:flex-start; padding:14px 0; gap:10px; }
+.opinion-panel .toolbar { padding:14px 0; gap:10px; flex-wrap:wrap; }
 .opinion-panel .meta { flex-wrap:wrap; gap:6px; }
 .opinion-panel .horizon-grid { grid-template-columns:1fr; grid-auto-rows:1fr; gap:var(--gap); flex:1; }
 .opinion-panel .horizon-card { padding:20px; }
@@ -280,7 +281,6 @@ html[data-theme="dark"] {
 .agent-explanation p:last-child { margin-bottom:0; }
 .agent-explanation p > span { color:var(--muted); font-size:12px; padding-top:2px; }
 @media(min-width:1600px) { .agent .agent-explanation p { min-height:0; } }
-@media(max-width:1050px) { .chart-opinion-grid { grid-template-columns:1fr; } .opinion-panel .horizon-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:600px) { .agent-grid,.opinion-panel .horizon-grid { grid-template-columns:1fr; } }
 .header-left { display:flex; align-items:center; gap:14px; min-width:0; }
 .menu-toggle { display:grid; place-items:center; flex-shrink:0; }
@@ -325,6 +325,14 @@ body.sidebar-collapsed main { margin-left:0; }
 .agent .judge-explanation { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:calc(var(--gap) * 2); row-gap:9px; }
 .agent .judge-explanation p { margin:0; }
 @media(max-width:600px) { .agent .judge-explanation { grid-template-columns:1fr; } }
+.rule-body { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px calc(var(--gap) * 2); margin:18px 0 20px; }
+.rule-body h4 { font-size:12px; font-weight:500; color:var(--muted); margin:0 0 6px; }
+.rule-body h4:not(:first-child) { margin-top:16px; }
+.agent .rule-body p { min-height:0; margin:0; flex:none; }
+.rule-body ol, .rule-body ul { margin:0; padding-left:20px; color:var(--copy); font-size:14px; line-height:1.8; }
+.rule-sources { grid-column:1 / -1; border-top:1px solid var(--line); padding-top:14px; }
+.rule-sources ul { font-size:12px; }
+@media(max-width:600px) { .rule-body { grid-template-columns:1fr; } }
 /* With the team synthesis moved into the judge card, the checklist spans the width with its items side by side. */
 @media(min-width:801px) { .checks { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--gap); } .checks li { margin-top:0; } }
 .chart-studies { position:relative; }

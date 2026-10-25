@@ -10,6 +10,7 @@ from market import DB, INTERVALS
 # How long each horizon's call is held at most before it is scored, and which stored bars measure it.
 # shortcut: returns leave out fees; subtract them if scores are read as account returns.
 # Swing exits are found on 1h bars, as research.py finds them, so one rule scores the same in both places.
+# 'intraday' only scores reports from before rules-v2, which dropped the intraday call.
 HOLDS = {'intraday': ('15m', 4 * 3600000), 'swing': ('1h', 7 * 24 * 3600000)}
 # Every call enters at the last 15m close before it, so a live call made mid-way through a 4h bar is not priced at that bar's open.
 ENTRY = '15m'

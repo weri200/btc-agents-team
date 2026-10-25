@@ -96,7 +96,7 @@ def save_snapshot(snapshot, path=DB):
         save_candles(db, snapshot['symbol'], snapshot['candles'])
 
 
-# Positioning history for the derivatives analyst: 1h feeds intraday, 4h feeds swing.
+# Positioning history the explainer reads: 4h for the call's own frame, 1h for the moves inside it.
 HISTORY_PERIODS = {'1h': 3600000, '4h': 14400000}
 HISTORY_COUNT = 25
 FUNDING_COUNT = 21

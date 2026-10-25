@@ -16,8 +16,8 @@ from market import iso
 BASE = 'http://127.0.0.1:1234/v1'
 CONFIG = Path(__file__).resolve().parent / 'models.json'
 ROLES = {'explainer': '해설 모델'}
-HORIZONS = {'intraday': ('단타', '5분 · 15분 · 1시간', ('5m', '15m', '1h')),
-            'swing': ('스윙', '4시간 · 1일', ('4h', '1d'))}
+# The 'swing' key stays so scores line up with reports saved before the intraday call was dropped.
+HORIZONS = {'swing': ('4시간 추세 돌파', '1일 추세 · 4시간 돌파', ('4h', '1d'))}
 RETRY_DELAY = 5
 TIMINGS = Path(__file__).resolve().parent / 'data' / 'llm_timings.json'
 DEFAULT_EXPECTED_MS = 60000
@@ -197,7 +197,7 @@ def numbers_in(text):
 
 
 PROMPT = ('모든 문장은 반드시 한국어로 씁니다. 영어 문장을 쓰지 마세요. Binance USDⓈ-M 무기한 선물의 공개 시장 데이터입니다. '
-          '주기(intraday 단타, swing 스윙)마다 verdict는 서버 코드가 rule과 checks로 이미 정한 판정입니다. 판정을 바꾸거나 다른 판정을 권하지 마세요. '
+          'horizons.swing의 verdict는 서버 코드가 rule과 checks로 이미 정한 판정입니다(1일 추세 방향의 4시간 20봉 돌파). 판정을 바꾸거나 다른 판정을 권하지 마세요. '
           'summary에는 checks를 바탕으로 이 판정이 나온 이유를 한 문장으로 씁니다. '
           'risk에는 규칙이 보지 않는 위험을 한두 문장으로 씁니다. facts와 signals의 펀딩비율, 미결제약정, 롱숏 비율, 테이커 비율, ATR 비율(변동성)과 '
           'macro의 금리·VIX·지수 변화, 경제 일정(calendar), 뉴스(news)에서 찾습니다. macro가 없으면 뉴스·거시 자료가 없다고 적습니다. '
