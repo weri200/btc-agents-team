@@ -273,8 +273,12 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(self.post()[0], 200)
         with patch.object(server.collector, 'collect', side_effect=market.MarketError('offline')):
             self.assertEqual(self.post()[0], 502)
-        with patch.object(server.local_llm, 'load_config', side_effect=server.local_llm.AnalysisError('bad models.json')):
-            self.assertEqual(self.post()[0], 502)
+        # A bad models.json still gives the code's calls, without the explanation.
+        with patch.object(server.local_llm, 'load_config', side_effect=server.local_llm.AnalysisError('models.json 오류.')),                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}),                 patch.object(server.collector, 'derivatives', return_value={}),                 patch.object(server.macro, 'collect', return_value={}),                 patch.object(server.local_llm, 'analyze', return_value={'id': 'test', 'warnings': []}) as analyze,                 patch.object(server.journal, 'save_report'):
+            status, body = self.post()
+        self.assertEqual(status, 200)
+        self.assertIsNone(analyze.call_args.args[1])
+        self.assertIn('해설 없이 규칙 판정만', json.loads(body)['warnings'][0])
         self.assert_released()
 
     def test_progress_and_last_report_endpoints(self):

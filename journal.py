@@ -9,7 +9,10 @@ from market import DB, INTERVALS
 
 # How long each horizon's call is held at most before it is scored, and which stored bars measure it.
 # shortcut: returns leave out fees; subtract them if scores are read as account returns.
-HOLDS = {'intraday': ('15m', 4 * 3600000), 'swing': ('4h', 7 * 24 * 3600000)}
+# Swing exits are found on 1h bars, as research.py finds them, so one rule scores the same in both places.
+HOLDS = {'intraday': ('15m', 4 * 3600000), 'swing': ('1h', 7 * 24 * 3600000)}
+# Every call enters at the last 15m close before it, so a live call made mid-way through a 4h bar is not priced at that bar's open.
+ENTRY = '15m'
 # Swing calls follow research.py's 'breakout-volume' rule: out at 2 x the 4h ATR in profit or 1 x in loss, whichever comes first.
 BRACKETS = {'swing': (2.0, 1.0)}
 # The 4h ATR the models saw, in real prices (backtest reports saw prices times priceScale).
@@ -51,9 +54,11 @@ def close_at(db, symbol, interval, at):
 def bracket_exit(db, symbol, interval, as_of, hold, entry, direction, atr, tp, sl):
     """Exit price of a call held with an ATR target and stop: the level the first stored bar reaches (a bar that touches both
     counts as the stop, since one bar cannot tell which came first), else the close when the hold ends.
+    Only bars opening at or after `as_of` count: moves before the call are not the call's result.
     None when the ATR or any bar of the hold is missing."""
     step = INTERVALS[interval]
-    first, last = (as_of + 1) // step * step, (as_of + hold + 1) // step * step - step
+    # shortcut: a live call made mid-bar skips the rest of that bar (under 1h on 1h bars); scan finer bars if that matters.
+    first, last = -(-as_of // step) * step, (as_of + hold + 1) // step * step - step
     rows = db.execute('SELECT payload FROM candles WHERE symbol=? AND interval=? AND open_time BETWEEN ? AND ? ORDER BY open_time',
                       (symbol, interval, first, last)).fetchall()
     if not atr or len(rows) != (last - first) // step + 1:
@@ -78,11 +83,13 @@ def outcome(db, symbol, as_of, horizon, verdict, now, atr=None):
     if verdict == 'wait':
         return {'status': 'wait', 'points': POINTS['wait']}
     direction = 1 if verdict == 'long' else -1
-    entry = close_at(db, symbol, interval, as_of)
+    entry = close_at(db, symbol, ENTRY, as_of)
     if entry is None:
         exit_ = None
     elif horizon in BRACKETS:
-        exit_ = bracket_exit(db, symbol, interval, as_of, hold, entry, direction, atr, *BRACKETS[horizon])
+        args = (as_of, hold, entry, direction, atr, *BRACKETS[horizon])
+        # Backtests saved before rules-v1 kept only the 4h bars of the hold.
+        exit_ = bracket_exit(db, symbol, interval, *args) or bracket_exit(db, symbol, '4h', *args)
     else:
         exit_ = close_at(db, symbol, interval, as_of + hold)
     if exit_ is None:

@@ -1,5 +1,6 @@
 import unittest
 
+import indicators
 import research
 import signals
 
@@ -38,8 +39,12 @@ class SignalsTest(unittest.TestCase):
         self.assertIn('고점 돌파', lines[1])
         self.assertIn('0.18배 (부족)', lines[2])
         self.assertIn('자료 없음', signals.checks({}, 'intraday')[1])
-        self.assertIn('익절 114 · 손절 108', signals.exit_plan(facts(), 'swing', 'long'))
-        self.assertIn('익절 106 · 손절 112', signals.exit_plan(facts(), 'swing', 'short'))
+        # The explainer's wording of the volume ratio draws the same line as the rule.
+        for ratio, word in ((1.2, '평소보다 많음'), (1.0, '평소 이하')):
+            self.assertIn('충분' if ratio > 1 else '부족', signals.checks(facts(**{'4h.volumeRatio20': ratio}), 'swing')[2])
+            self.assertIn(word, indicators.describe({'4h.volumeRatio20': ratio}, ['4h.volumeRatio20'])[0])
+        self.assertIn('진입 100 · 익절 104 · 손절 98', signals.exit_plan(facts(), 'swing', 'long'))  # 15m close, 4h ATR
+        self.assertIn('익절 96 · 손절 102', signals.exit_plan(facts(), 'swing', 'short'))
         self.assertNotIn('익절 1', signals.exit_plan(facts(), 'swing', 'wait'))
         self.assertIn('4시간이 지나면', signals.exit_plan(facts(), 'intraday', 'long'))
 
