@@ -20,6 +20,11 @@ def report(rid, as_of, intraday, swing, version='v-test', atr=None):
             'horizons': {'intraday': horizon(intraday), 'swing': horizon(swing)}}
 
 
+def flat_1h(start, hours=168, price=100):
+    """A 1h close of `price` at `start` and at every hour of the swing hold after it."""
+    return {start + i * H: price for i in range(hours + 1)}
+
+
 def flat_4h(start, price=100):
     """A 4h close of `price` at `start` (the entry) and at every 4h close of the 7-day swing hold after it."""
     return {start + i * 4 * H: price for i in range(43)}
@@ -74,7 +79,8 @@ class JournalTest(unittest.TestCase):
         self.assertEqual({g['role'] for g in groups}, {'judge'})  # only the final call is saved
 
     def test_swing_exits_at_the_atr_target_or_stop(self):
-        self.bars('4h', {**flat_4h(T0), T0 + 12 * H: (94, 103, 100)})
+        self.bars('15m', {T0: 100})  # the entry
+        self.bars('1h', {**flat_1h(T0), T0 + 12 * H: (94, 103, 100)})
         with closing(journal.connect(self.path)) as db:
             def out(verdict, atr):
                 return journal.outcome(db, 'BTCUSDT', T0, 'swing', verdict, T0 + 168 * H, atr)
@@ -85,6 +91,21 @@ class JournalTest(unittest.TestCase):
         # Backtest reports carry the ATR of prices times priceScale; scoring divides it back to real prices (10 / 2 = 5).
         journal.save_report({**report('s', T0, 'wait', 'long', atr=10), 'priceScale': 2}, self.path)
         self.assertAlmostEqual(self.group(journal.scores(self.path, now=T0 + 168 * H), 'swing')['meanReturnPct'], -5.0)
+
+    def test_a_live_call_mid_bar_is_scored_from_its_own_time(self):
+        at = T0 + 2 * H + 40 * 60000  # 40 minutes into an hour
+        self.bars('15m', {T0 + 2 * H + 30 * 60000: 100})  # the last 15m close before the call is the entry
+        # A dip to 90 in the hour the call was made in: the bar may have dipped before the call, so the scan starts after it.
+        self.bars('1h', {**flat_1h(T0, 170), T0 + 3 * H: (90, 100, 100)})
+        with closing(journal.connect(self.path)) as db:
+            result = journal.outcome(db, 'BTCUSDT', at, 'swing', 'long', at + 169 * H, 5)
+        self.assertEqual((result['entry'], result['exit']), (100, 100))  # not stopped out at 95
+
+    def test_older_backtests_fall_back_to_their_4h_bars(self):
+        self.bars('15m', {T0: 100})
+        self.bars('4h', {**flat_4h(T0), T0 + 12 * H: (94, 103, 100)})
+        with closing(journal.connect(self.path)) as db:
+            self.assertAlmostEqual(journal.outcome(db, 'BTCUSDT', T0, 'swing', 'long', T0 + 168 * H, 5)['return'], -0.05)
 
     def test_saving_the_same_report_twice_counts_once(self):
         journal.save_report(report('a', T0, 'wait', 'wait'), self.path)

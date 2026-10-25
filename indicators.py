@@ -157,7 +157,7 @@ def describe(facts, keys):
             span = '1기간' if '1Pct' in name else ('24기간' if name.startswith('oi') else '20기간')
             lines.append(f"{frame} {what} {span} 변화 {value}%: {'증가' if value > 0 else '감소' if value < 0 else '변화 없음'}")
         elif name == 'volumeRatio20':
-            level = '평소보다 많음' if value >= 1.5 else '평소보다 적음' if value <= 0.7 else '평소 수준'
+            level = '평소보다 많음' if value > 1 else '평소 이하'  # the same line signals.py's volume condition uses
             lines.append(f'{frame} 거래량은 직전 20봉 평균의 {value}배: {level}')
         elif name in ('longShortRatioChange24', 'topLongShortRatioChange24'):
             who = '전체 계정' if name.startswith('long') else '대형 트레이더'

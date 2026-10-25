@@ -64,7 +64,7 @@ def exit_plan(f, horizon, verdict):
         return f'진입 뒤 {hours}시간이 지나면 그때 {interval} 종가로 청산합니다.'
     tp, sl = journal.BRACKETS[horizon]
     plan = f'4시간 ATR {tp:g}배 익절 · {sl:g}배 손절 중 먼저 닿는 쪽, 최대 {hours // 24}일 보유'
-    atr, close = f.get('4h.atr14'), f.get('4h.close')
+    atr, close = f.get('4h.atr14'), f.get(f'{journal.ENTRY}.close')  # the entry the score uses
     if verdict == 'wait' or not atr or not close:
         return plan + '.'
     d = 1 if verdict == 'long' else -1

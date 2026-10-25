@@ -104,8 +104,12 @@ class Handler(SimpleHTTPRequestHandler):
         if not local_llm.lock.acquire(blocking=False):
             return self.json_response(409, {'error': '이미 다른 창에서 분석 중입니다. 진행 상황을 표시합니다.'})
         try:
-            config = local_llm.load_config()
-            local_llm.progress.begin(payload['symbol'], {'explainer': config['model']})
+            try:
+                config, problem = local_llm.load_config(), None
+            except local_llm.AnalysisError as exc:
+                # The calls never need the model, so a bad models.json only drops the explanation.
+                config, problem = None, str(exc)
+            local_llm.progress.begin(payload['symbol'], {'explainer': config['model']} if config else {})
             snapshot = {**collector.collect(payload['symbol']), 'derivatives': collector.derivatives(payload['symbol'])}
             try:
                 snapshot['macro'] = macro.collect(payload['symbol'], snapshot['serverTime'])
@@ -113,6 +117,8 @@ class Handler(SimpleHTTPRequestHandler):
                 # News and macro only feed the explanation; the report says why they are missing.
                 snapshot['macro'] = {'error': str(exc)}
             result = local_llm.analyze(snapshot, config)
+            if problem:
+                result['warnings'].append(f'{problem} 해설 없이 규칙 판정만 냈습니다.')
             try:
                 journal.save_report(result, collector.db_path)
             except Exception as exc:
