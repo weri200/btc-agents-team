@@ -20,7 +20,8 @@ FEEDS = {
                      ('Not a web link', 'javascript:alert(1)', 'Sun, 25 Oct 2026 14:00:00 +0000', 'x'),
                      ('No date', 'https://www.coindesk.com/d', 'soon', 'x')),
     'Cointelegraph': feed(('Bitcoin slides on evacuation news', 'https://cointelegraph.com/a', 'Sun, 25 Oct 2026 14:00:00 +0000', 'dup'),
-                          ('ETF outflows ease', 'https://cointelegraph.com/b', 'Sat, 24 Oct 2026 20:00:00 +0900', 'flows')),
+                          ('ETF outflows ease', 'https://cointelegraph.com/b', 'Sat, 24 Oct 2026 20:00:00 +0900', 'flows'),
+                          ('Token X launches presale', 'https://cointelegraph.com/press-releases/x', 'Sun, 25 Oct 2026 13:00:00 +0000', 'paid')),
 }
 
 
@@ -38,12 +39,22 @@ class NewsTest(unittest.TestCase):
                          [('CoinDesk', 'Bitcoin slides on evacuation news', '2026-10-25T15:00+00:00'),  # the later copy of a title is dropped
                           ('Cointelegraph', 'ETF outflows ease', '2026-10-24T11:00+00:00')])  # converted to UTC
         self.assertEqual(result['items'][0]['excerpt'], 'BTC fell & more')  # tags and entities removed
-        self.assertEqual(result['warnings'], ['Decrypt 뉴스를 받지 못했습니다(URLError).'])
+        self.assertEqual(result['warnings'], ['Decrypt 뉴스를 받지 못했습니다(URLError).', '협찬·보도자료 등 믿기 어려운 코인 기사 1개를 뺐습니다.'])
 
     def test_a_broken_feed_only_drops_itself(self):
         result = self.collect(lambda name: b'<html>not rss' if name == 'CoinDesk' else FEEDS.get(name, feed()))
         self.assertEqual([i['publisher'] for i in result['items']], ['Cointelegraph', 'Cointelegraph'])
-        self.assertEqual(result['warnings'], ['CoinDesk 뉴스를 받지 못했습니다(ParseError).'])
+        self.assertEqual(result['warnings'], ['CoinDesk 뉴스를 받지 못했습니다(ParseError).', '협찬·보도자료 등 믿기 어려운 코인 기사 1개를 뺐습니다.'])
+
+    def test_screen_keeps_named_trusted_newsrooms_with_real_links(self):
+        base = {'title': 't', 'publisher': 'Reuters', 'url': 'https://www.reuters.com/markets/x'}
+        cases = [(base, True), ({**base, 'publisher': ' CoinDesk '}, True), ({**base, 'publisher': ''}, False),
+                 ({**base, 'publisher': 'The Motley Fool'}, False), ({**base, 'url': None}, False),
+                 ({**base, 'url': 'javascript:alert(1)'}, False), ({**base, 'url': 'https://www.coindesk.com/sponsored-content/x'}, False),
+                 ({**base, 'url': 'https://www.coindesk.com/markets/2026/10/24/bitcoin-pressure'}, True)]  # "pressure" is not a press release
+        for item, kept in cases:
+            with self.subTest(item=item):
+                self.assertEqual(news.screen([item]), ([item], 0) if kept else ([], 1))
 
 
 if __name__ == '__main__':

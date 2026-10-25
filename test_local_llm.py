@@ -42,7 +42,7 @@ RSS = {'time': '2026-05-27T22:10+00:00', 'publisher': 'CoinDesk', 'title': 'Bitc
        'url': 'https://www.coindesk.com/x'}
 MACRO = {'facts': {'macro.vix': 19.03, 'macro.us10yPct': 5.13}, 'dates': {'vix': '2026-05-27'}, 'warnings': ['거시 주의'],
          'calendar': [{'time': '2026-05-28T12:30:00+00:00', 'event': 'CPI', 'status': '예정', 'consensus': '', 'previous': '', 'actual': ''}],
-         'news': [{'id': 'news-1', 'date': '2026-05-27', 'title': 'Bitcoin ETF inflows', 'excerpt': 'x', 'publisher': 'Zacks',
+         'news': [{'id': 'news-1', 'date': '2026-05-27', 'title': 'Bitcoin ETF inflows', 'excerpt': 'x', 'publisher': 'Nasdaq',
                    'url': 'https://www.nasdaq.com/a'}]}
 
 
@@ -163,15 +163,14 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(len(report['horizons']['swing']['agents'][0]['sources']), 1)
         self.assertEqual(len(report['horizons']['swing']['review']['sources']), 17)  # OpenBB, 15 RSS and 1 OpenBB headline; the page takes up to 40
 
-    def test_openbb_headlines_without_publisher_or_link_are_kept_and_untitled_ones_dropped(self):
-        self.snapshot['macro'] = {**MACRO, 'news': [{**MACRO['news'][0], 'publisher': '', 'url': None},
-                                                    {**MACRO['news'][0], 'title': ''}]}
+    def test_unclear_or_untrusted_openbb_headlines_are_left_out(self):
+        good = MACRO['news'][0]
+        self.snapshot['macro'] = {**MACRO, 'news': [good, {**good, 'publisher': ''}, {**good, 'url': None}, {**good, 'publisher': 'The Motley Fool'},
+                                                    {**good, 'publisher': 'Zacks'}, {**good, 'title': ''}]}
         fake = FakeLMStudio()
         report = self.analyze(fake)
-        self.assertEqual(len(json.loads(fake.calls[0]['messages'][1]['content'])['news']), 1)
-        review = report['horizons']['swing']['review']
-        self.assertEqual(review['checks'][0]['news'], [{'publisher': '', 'title': 'Bitcoin ETF inflows', 'url': None, 'time': '2026-05-27T00:00:00+00:00'}])
-        self.assertEqual(review['sources'][1]['title'], 'Bitcoin ETF inflows')  # no leading separator
+        self.assertEqual([n['publisher'] for n in json.loads(fake.calls[0]['messages'][1]['content'])['news']], ['Nasdaq'])
+        self.assertIn('출처가 불분명하거나 신뢰 목록 밖인 OpenBB 기사 4개를 뺐습니다.', report['warnings'])
 
     def test_the_explainer_gets_the_frames_the_rule_reads(self):
         self.assertEqual(set(llm.HORIZONS['swing'][2]), set(signals.FRAMES['swing']))
