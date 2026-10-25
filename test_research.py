@@ -166,5 +166,63 @@ class ResearchTest(unittest.TestCase):
         self.assertNotIn('__DATA__', page)
 
 
+
+D = 24 * H
+
+
+def days(closes, start=1700000000000 - 1700000000000 % D):
+    return [{'openTime': start + i * D, 'closeTime': start + (i + 1) * D - 1, 'close': str(c)} for i, c in enumerate(closes)]
+
+
+class MomentumTest(unittest.TestCase):
+    CLOSES = [100] * 20 + [110, 121, 108.9, 98.01]  # up 10%, up 10%, down 10%, down 10%
+
+    def funding(self, bars):
+        # One settlement inside the first held day and one inside the last.
+        return [{'time': int(bars[20]['closeTime']) + 1, 'fundingRate': '0.001'}, {'time': int(bars[22]['closeTime']) + 5, 'fundingRate': '0.001'}]
+
+    def test_holds_until_the_signal_flips_and_pays_fees_and_funding(self):
+        bars = days(self.CLOSES)
+        run = research.hold_until_flip(bars, self.funding(bars), 2, 0.0005)
+        nets = [n for _, n in run['days']]
+        # Long on day one (entry fee and funding paid), held on day two, flipped short on day three (two units of fee,
+        # and a short receives positive funding).
+        self.assertEqual(len(nets), 3)
+        self.assertAlmostEqual(nets[0], 0.10 - 0.0005 - 0.001)
+        self.assertAlmostEqual(nets[1], -0.10)
+        self.assertAlmostEqual(nets[2], 0.10 - 0.001 + 0.001)
+        self.assertAlmostEqual(run['fees'], 0.0015)
+        self.assertAlmostEqual(run['funding'], 0.0)
+
+    def test_always_long_benchmark_and_volatility_sizing(self):
+        bars = days(self.CLOSES)
+        hold = research.hold_until_flip(bars, self.funding(bars), None, 0.0005)
+        self.assertAlmostEqual([n for _, n in hold['days']][2], -0.10 - 0.001)  # a long pays the funding
+        sized = research.hold_until_flip(bars, [], 2, 0, vol_target=0.2)
+        # Twenty daily changes, one of +10%: realized volatility about 41.6% a year, so the position is about 0.48.
+        changes = [0.0] * 19 + [0.1]
+        mean = sum(changes) / 20
+        size = 0.2 / ((sum((c - mean) ** 2 for c in changes) / 20 * 365) ** 0.5)
+        self.assertAlmostEqual(sized['days'][0][1], size * 0.10)
+        # Up on a 30-day view after twenty flat days: no realized volatility, so the size is the cap.
+        flat = research.hold_until_flip(days([90] * 11 + [100] * 30 + [110]), [], 30, 0, vol_target=0.2)
+        self.assertAlmostEqual(flat['days'][-1][1], 2.0 * 0.10)
+
+    def test_compound_by_year(self):
+        new_year = 1767225600000  # 2026-01-01T00:00Z
+        result = research.compound([(new_year - D, 0.10), (new_year, -0.5), (new_year + D, 0.10)])
+        self.assertAlmostEqual(result['returnPct'], (1.1 * 0.5 * 1.1 - 1) * 100)
+        self.assertAlmostEqual(result['maxDrawdownPct'], 50)
+        self.assertEqual(set(result['years']), {'2025', '2026'})
+        self.assertAlmostEqual(result['years']['2026'], (0.5 * 1.1 - 1) * 100)
+
+    def test_tsmom_runs_on_exchange_history(self):
+        collector = market.Collector(Path(tempfile.mkdtemp()) / 'm.sqlite3')
+        with patch.object(collector, 'request', side_effect=fake_request):
+            results = research.tsmom('BTCUSDT', NOW - 30 * D, [5, 10], 0.1, collector=collector, now=NOW, log=lambda line: None)
+        self.assertEqual(list(results), ['5일', '10일', '계속 롱'])
+        self.assertGreater(results['5일']['returnPct'], 0)  # prices only climb in the fake, so momentum stays long
+        self.assertGreater(results['계속 롱']['funding'], 0)  # positive rates: the long paid
+
 if __name__ == '__main__':
     unittest.main()

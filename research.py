@@ -1,8 +1,10 @@
 """4h rule research: candidate rules decide at past 4h closes, and each trade is scored by whether its target or its stop
 is hit first on 1h bars. No models run, so months of moments take minutes. Run: python research.py --symbol BTCUSDT --days 180
-Facts come from the same server indicators the live analysis uses (indicators.compute), so a rule found here can go into signals.py as is."""
+Facts come from the same server indicators the live analysis uses (indicators.compute), so a rule found here can go into signals.py as is.
+--momentum instead scores daily time-series momentum held until its signal flips, with fees and funding, back to 2020."""
 import argparse
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
+from datetime import datetime, timezone
 import itertools
 import json
 from pathlib import Path
@@ -361,6 +363,73 @@ if (last) chart.timeScale().setVisibleRange({ from: last.entry - 30 * 86400, to:
 """
 
 
+VOL_DAYS = 20  # realized volatility window for --vol-target
+
+
+def hold_until_flip(bars, funding, lookback, fee, vol_target=None, cap=2.0):
+    """Time-series momentum on daily closes, held until the signal flips: at each close the position is +1 when the close is
+    above the close `lookback` days earlier, -1 when below (or that sign times vol_target / realized volatility, at most
+    `cap`, when vol_target is set). Each day earns position x the next day's change, less `fee` per unit of position
+    changed and the funding the position paid while open (longs pay positive rates). lookback None stays long throughout.
+    Returns {'days': [(day open time, net return)], 'fees', 'funding'} with fees and funding as summed fractions."""
+    closes = [float(b['close']) for b in bars]
+    times = [r['time'] for r in funding]
+    days, position, fees, paid = [], 0.0, 0.0, 0.0
+    for i in range(max(lookback or 0, VOL_DAYS), len(bars) - 1):
+        size = 1.0 if lookback is None else side(closes[i] / closes[i - lookback] - 1)
+        if vol_target and size:
+            changes = [closes[k] / closes[k - 1] - 1 for k in range(i - VOL_DAYS + 1, i + 1)]
+            mean = sum(changes) / VOL_DAYS
+            vol = (sum((c - mean) ** 2 for c in changes) / VOL_DAYS * 365) ** 0.5
+            size *= min(cap, vol_target / vol) if vol else cap
+        # Funding settled after this close and up to the next one is paid on the position held through it.
+        end = int(bars[i + 1]['closeTime'])
+        rates = funding[bisect_right(times, int(bars[i]['closeTime'])):bisect_right(times, end)]
+        cost, owed = fee * abs(size - position), size * sum(float(r['fundingRate']) for r in rates)
+        days.append((int(bars[i + 1]['openTime']), size * (closes[i + 1] / closes[i] - 1) - cost - owed))
+        fees, paid, position = fees + cost, paid + owed, size
+    return {'days': days, 'fees': fees, 'funding': paid}
+
+
+def compound(days):
+    """Total return, max drawdown and return per calendar year (UTC) of daily net returns, all in percent."""
+    equity, peak, drawdown, years = 1.0, 1.0, 0.0, {}
+    for at, net in days:
+        equity *= 1 + net
+        peak = max(peak, equity)
+        drawdown = max(drawdown, 1 - equity / peak)
+        year = market.iso(at)[:4]
+        years[year] = years.get(year, 1.0) * (1 + net)
+    return {'returnPct': (equity - 1) * 100, 'maxDrawdownPct': drawdown * 100, 'years': {y: (v - 1) * 100 for y, v in years.items()}}
+
+
+def tsmom(symbol, since, lookbacks, fee_pct, vol_target=None, collector=None, now=None, log=print):
+    """Hold-until-flip momentum per lookback (in days) from `since` (ms) to now, next to holding a long the whole time.
+    Daily Binance candles and funding only, so years of history take seconds."""
+    collector = collector or market.Collector()
+    now = now or int(time.time() * 1000)
+    warm = (max(*lookbacks, VOL_DAYS) + 1) * DAY
+    bars = klines(collector, symbol, '1d', since - warm, now, now)
+    funding = funding_history(collector, symbol, since - warm, now)
+    log(f'{symbol} · 일봉 {len(bars)}개 ({market.iso(bars[0]["openTime"])[:10]}~) · 펀딩 {len(funding)}회 · 왕복 수수료 {fee_pct}%')
+    fee = fee_pct / 200  # per side, charged on every unit of position changed
+    results = {}
+    # The benchmark (None): a long held throughout, paying funding, with one entry fee.
+    for lookback in [*lookbacks, None]:
+        run = hold_until_flip(bars, funding, lookback, fee, vol_target if lookback else None)
+        days = [d for d in run['days'] if d[0] >= since]
+        results[f'{lookback}일' if lookback else '계속 롱'] = {**compound(days), 'fees': run['fees'] * 100, 'funding': run['funding'] * 100}
+    return results
+
+
+def tsmom_report(symbol, results, log=print):
+    years = sorted({y for r in results.values() for y in r['years']})
+    log(f"{symbol} | 전체 · 최대낙폭 · 수수료 · 펀딩 | " + ' '.join(f'{y:>7}' for y in years))
+    for name, r in results.items():
+        log(f"{name:>6} | {r['returnPct']:+8.1f}% · -{r['maxDrawdownPct']:.1f}% · -{r['fees']:.1f}% · {-r['funding']:+.1f}% | "
+            + ' '.join(f"{r['years'][y]:+6.1f}%" if y in r['years'] else '      -' for y in years))
+
+
 def report(data, min_trades, top, log=print):
     log(f"시점 {data['moments']}개 (건너뜀 {data['skipped']}) · 학습 구간 ~ {market.iso(data['split'])[:10]} · 검증 구간 그 이후")
     log('규칙 | 목표·손절(ATR배; 추적은 추적 손절 ATR배, 4BC는 볼린저 밴드)·보유 | 학습: 진입·적중률·평균순수익 / 단일 포지션 진입·누적·최대낙폭 | 검증: 같음')
@@ -386,7 +455,17 @@ if __name__ == '__main__':
     parser.add_argument('--top', type=int, default=30, help='표시할 줄 수')
     parser.add_argument('--chart', nargs=4, metavar=('RULE', 'TP', 'SL', 'HOLD'),
                         help='이 규칙·청산의 거래를 reports/에 차트로 저장. 예: breakout-volume 2 1 168, trend 추적 3 168, 4bc 밴드 밴드 720')
+    parser.add_argument('--momentum', action='store_true', help='4시간봉 규칙 대신 일봉 시계열 모멘텀을 신호가 바뀔 때까지 들고 펀딩을 포함해 채점')
+    parser.add_argument('--since', default='2020-01-01', help='--momentum: 시작 날짜(UTC). 종목 상장 전이면 상장일부터')
+    parser.add_argument('--lookbacks', type=int, nargs='+', default=[20, 60, 120], help='--momentum: 수익률을 볼 일수')
+    parser.add_argument('--vol-target', type=float, help='--momentum: 연 변동성 목표(예: 0.4). 주면 포지션 크기를 목표/실현 변동성으로 맞춤(최대 2배)')
     args = parser.parse_args()
+    if args.momentum:
+        since = int(datetime.fromisoformat(args.since).replace(tzinfo=timezone.utc).timestamp() * 1000)
+        if min(args.lookbacks) <= 0 or (args.vol_target is not None and args.vol_target <= 0):
+            parser.error('--lookbacks와 --vol-target은 0보다 커야 합니다.')
+        tsmom_report(args.symbol, tsmom(args.symbol, since, args.lookbacks, args.fee, args.vol_target))
+        raise SystemExit
     if args.days < 7 or min(args.tp + args.sl + args.trail) <= 0 or min(args.hold_hours) <= 0:
         parser.error('--days는 7 이상, 목표·손절·추적 손절·보유 시간은 0보다 커야 합니다.')
     chart = None
