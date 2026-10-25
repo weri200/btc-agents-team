@@ -245,6 +245,11 @@ class ServerTests(unittest.TestCase):
         connection.close()
         return result
 
+    def assert_released(self):
+        # The handler answers before its finally block releases the lock, so give it a moment.
+        self.assertTrue(server.local_llm.lock.acquire(timeout=1))
+        server.local_llm.lock.release()
+
     def test_local_analysis_guards(self):
         self.assertEqual(self.post(headers={'Origin': 'https://other.example'})[0], 403)
         self.assertEqual(self.post(headers={'Content-Type': 'text/plain'})[0], 400)
@@ -270,7 +275,7 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(self.post()[0], 502)
         with patch.object(server.local_llm, 'load_config', side_effect=server.local_llm.AnalysisError('bad models.json')):
             self.assertEqual(self.post()[0], 502)
-        self.assertFalse(server.local_llm.lock.locked())
+        self.assert_released()
 
     def test_progress_and_last_report_endpoints(self):
         progress = server.local_llm.Progress(Path(tempfile.mkdtemp()) / 'timings.json')
@@ -289,7 +294,7 @@ class ServerTests(unittest.TestCase):
             with patch.object(server.collector, 'collect', side_effect=RuntimeError('boom')):
                 self.assertEqual(self.post()[0], 500)
             self.assertEqual(json.loads(self.get('/api/progress')[1])['state'], 'failed')
-            self.assertFalse(server.local_llm.lock.locked())
+            self.assert_released()
 
 
 if __name__ == '__main__':
