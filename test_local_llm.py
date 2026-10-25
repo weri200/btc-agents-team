@@ -91,6 +91,13 @@ class AnalyzeTests(unittest.TestCase):
         self.assertIn('조건', swing['summary'])
         self.assertIn('해설 모델을 실행하지 않아', swing['disagreement'])
 
+    def test_progress_card_gets_a_one_line_opinion(self):
+        seen = []
+        with patch.object(llm.progress, 'role', side_effect=lambda r, s, reason=None: seen.append((r, s, reason))):
+            report = self.analyze(FakeLMStudio())
+        verdict = {'long': '롱', 'short': '숏', 'wait': '관망'}[report['horizons']['swing']['verdict']]
+        self.assertEqual(seen[-1], ('explainer', 'done', f'{verdict} · AI 주의 보통 — 추세는 위지만 거래량이 부족해 관망입니다.'))
+
     def test_failed_explanation_keeps_the_calls(self):
         seen = []
         with patch.object(llm.progress, 'role', side_effect=lambda r, s, reason=None: seen.append((r, s))):
