@@ -10,6 +10,7 @@ from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHand
 from urllib.error import HTTPError, URLError
 
 import indicators
+from news import screen
 import signals
 from market import iso
 
@@ -303,9 +304,12 @@ def analyze(snapshot, config=None):
         warnings.append('뉴스·거시 자료: ' + macro['error'])
     feed = snapshot.get('news') if isinstance(snapshot.get('news'), dict) else {}
     warnings += feed.get('warnings', [])
-    # Coin news from RSS (with minutes) first, then OpenBB's date-only headlines; ids are what the model may cite.
-    news = {f'news-{i}': n for i, n in enumerate(
-        [n for n in [*feed.get('items', []), *({**n, 'time': n['date']} for n in macro.get('news', []))] if n['title']], 1)}
+    # OpenBB's date-only headlines go through the same source screen as the RSS ones (news.screen).
+    openbb, dropped = screen([{**n, 'time': n['date']} for n in macro.get('news', [])])
+    if dropped:
+        warnings.append(f'출처가 불분명하거나 신뢰 목록 밖인 OpenBB 기사 {dropped}개를 뺐습니다.')
+    # Coin news from RSS (with minutes) first, then OpenBB's; ids are what the model may cite.
+    news = {f'news-{i}': n for i, n in enumerate([n for n in [*feed.get('items', []), *openbb] if n['title']], 1)}
     calls = {h: {'verdict': signals.decide(facts, h), 'rule': signals.NAMES[h], 'checks': signals.checks(facts, h)} for h in HORIZONS}
     for h, call in calls.items():
         call['exit'] = signals.exit_plan(facts, h, call['verdict'])

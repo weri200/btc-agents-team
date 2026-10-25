@@ -46,6 +46,20 @@ def parse(raw, publisher, as_of):
     return items
 
 
+# Newsrooms with editors and a corrections policy. Left out on purpose: stock-picking columns and promotional writers
+# (The Motley Fool, Zacks, InvestorPlace), auto-generated flow notes (BNK Invest) and contributor networks.
+TRUSTED = {'coindesk', 'cointelegraph', 'decrypt', 'the block', 'reuters', 'bloomberg', 'associated press', 'cnbc',
+           'the wall street journal', 'financial times', "barron's", 'marketwatch', 'nasdaq'}
+PAID = re.compile(r'/(?:sponsored|sponsored-content|partner-content|press-releases?|pr)/', re.I)
+
+
+def screen(items):
+    """(kept, dropped): only headlines with a named trusted publisher and a web link that is not paid or a press release."""
+    kept = [i for i in items if (i.get('publisher') or '').strip().lower() in TRUSTED
+            and (i.get('url') or '').startswith(('https://', 'http://')) and not PAID.search(i['url'])]
+    return kept, len(items) - len(kept)
+
+
 def collect(as_of_ms, feeds=FEEDS, get=fetch):
     """{'items': newest LIMIT items across feeds, one per title, 'warnings': [why a feed was left out]}."""
     as_of = datetime.fromtimestamp(as_of_ms / 1000, timezone.utc)
@@ -55,6 +69,9 @@ def collect(as_of_ms, feeds=FEEDS, get=fetch):
             items += parse(get(url), publisher, as_of)
         except Exception as exc:  # a dead or changed feed only drops its own headlines
             warnings.append(f'{publisher} 뉴스를 받지 못했습니다({type(exc).__name__}).')
+    items, dropped = screen(items)  # before the limit, so paid items do not take the slots of real news
+    if dropped:
+        warnings.append(f'협찬·보도자료 등 믿기 어려운 코인 기사 {dropped}개를 뺐습니다.')
     seen, unique = set(), []
     for item in sorted(items, key=lambda i: i['time'], reverse=True):
         key = item['title'].lower()
