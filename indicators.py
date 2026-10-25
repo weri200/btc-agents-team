@@ -76,17 +76,16 @@ def interval_indicators(bars):
 
 
 def market_indicators(snapshot):
-    mark = snapshot['mark']
-    index = float(mark['indexPrice'])
-    result = {
-        'lastPrice': sig(float(snapshot['ticker']['price'])),
-        'markPrice': sig(float(mark['markPrice'])),
-        'indexPrice': sig(index),
-        'fundingRatePct': round(float(mark['lastFundingRate']) * 100, 5),
-        'openInterest': sig(float(snapshot['openInterest']['openInterest'])),
-    }
-    if index > 0:
-        result['premiumPct'] = round((float(mark['markPrice']) / index - 1) * 100, 4)
+    result = {'lastPrice': sig(float(snapshot['ticker']['price']))}
+    mark = snapshot.get('mark')  # backtests leave out mark, funding and open interest: the rules read candles only
+    if mark:
+        index = float(mark['indexPrice'])
+        result.update({'markPrice': sig(float(mark['markPrice'])), 'indexPrice': sig(index),
+                       'fundingRatePct': round(float(mark['lastFundingRate']) * 100, 5)})
+        if index > 0:
+            result['premiumPct'] = round((float(mark['markPrice']) / index - 1) * 100, 4)
+    if snapshot.get('openInterest'):
+        result['openInterest'] = sig(float(snapshot['openInterest']['openInterest']))
     return result
 
 

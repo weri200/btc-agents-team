@@ -89,13 +89,10 @@ def save_candles(db, symbol, candles):
 
 
 def save_snapshot(snapshot, path=DB):
+    """Keep the snapshot's closed bars, which scoring reads later. The rest of the snapshot was never read back, so it is not kept."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    summary = {k: v for k, v in snapshot.items() if k != 'candles'}
     with closing(sqlite3.connect(path)) as db, db:
-        db.execute('CREATE TABLE IF NOT EXISTS snapshots (symbol TEXT, collected_at TEXT, payload TEXT, PRIMARY KEY(symbol,collected_at))')
-        db.execute('INSERT OR REPLACE INTO snapshots VALUES (?,?,?)',
-                   (snapshot['symbol'], snapshot['collectedAt'], json.dumps(summary, ensure_ascii=False)))
         save_candles(db, snapshot['symbol'], snapshot['candles'])
 
 

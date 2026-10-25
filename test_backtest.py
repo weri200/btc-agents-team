@@ -1,5 +1,6 @@
 from contextlib import closing
 import io
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -65,7 +66,7 @@ class BacktestTest(unittest.TestCase):
         with patch.object(self.collector, 'request', side_effect=request), \
                 patch('backtest.local_llm.analyze', side_effect=report) as analyze, \
                 patch('backtest.signals.VERSION', 'v-test'):
-            saved = backtest.run('BTCUSDT', 10, 4, limit, self.collector, now=NOW, folder=self.archive, log=lambda line: None)
+            saved = backtest.run('BTCUSDT', 10, 4, limit, self.collector, now=NOW, log=lambda line: None)
         return saved, analyze
 
     def test_archive_outage_takes_the_last_value_within_30_minutes(self):
@@ -95,13 +96,9 @@ class BacktestTest(unittest.TestCase):
             sent = call.args[0]
             at = sent['serverTime']
             self.assertTrue(all(b['closeTime'] < at for bars in sent['candles'].values() for b in bars))
-            self.assertTrue(all(r['time'] < at for r in sent['derivatives']['funding']))
-            self.assertTrue(all(r['time'] < at for m in sent['derivatives']['periods'].values() for rows in m.values() for r in rows))
             last = sent['candles']['5m'][-1]
             self.assertEqual(last['close'], price(last['openTime'] + 300000))
             self.assertAlmostEqual(float(sent['ticker']['price']), float(last['close']))
-            self.assertEqual(sent['derivatives']['periods']['1h']['taker'][-1]['buySellRatio'], '0.6667')
-            self.assertEqual(sent['openInterest']['openInterest'], str(1000 + (at - 300000) % (24 * H) // 300000))  # the row 5 minutes before
             self.assertEqual(len(call.args), 1)  # no model config: a backtest never runs the explainer
         groups = journal.scores(self.collector.db_path, now=NOW)
         judge = next(g for g in groups if g['role'] == 'judge' and g['horizon'] == 'swing')
@@ -134,14 +131,24 @@ class BacktestTest(unittest.TestCase):
         with closing(sqlite3.connect(self.collector.db_path)) as db:
             self.assertEqual(db.execute('SELECT count(DISTINCT as_of) FROM reports').fetchone()[0], 4)
 
-    def test_missing_archive_day_skips_the_moment(self):
-        for path in (self.archive / 'BTCUSDT').iterdir():
-            path.unlink()
+    def test_backtests_need_no_archive(self):
         missing = HTTPError('https://data.binance.vision/x', 404, 'Not Found', {}, None)
-        with patch('backtest.urlopen', side_effect=missing):
-            saved, analyze = self.run_backtest(limit=2)
-        self.assertEqual((saved, analyze.call_count), (0, 0))
-        self.assertEqual(journal.scores(self.collector.db_path, now=NOW), [])
+        with patch('backtest.urlopen', side_effect=missing) as download:
+            saved, _ = self.run_backtest(limit=2)
+        self.assertEqual((saved, download.call_count), (2, 0))  # the rules read candles only
+
+    def test_saved_calls_are_the_rules_on_the_real_analysis(self):
+        with patch.object(self.collector, 'request', side_effect=request):
+            saved = backtest.run('BTCUSDT', 10, 4, 2, self.collector, now=NOW, log=lambda line: None)
+        self.assertEqual(saved, 2)
+        with closing(sqlite3.connect(self.collector.db_path)) as db:
+            rows = db.execute("SELECT r.payload, v.horizon, v.verdict FROM reports r JOIN verdicts v ON v.report_id = r.id").fetchall()
+        self.assertEqual(len(rows), 4)
+        for payload, horizon, verdict in rows:
+            report = json.loads(payload)
+            self.assertEqual((report['mode'], report['promptVersion']), ('backtest', backtest.signals.VERSION))
+            self.assertEqual(verdict, backtest.signals.decide(report['facts'], horizon))
+            self.assertIsNone(report['horizons'][horizon]['explainer'])
 
     def test_archive_download_is_kept_and_checked(self):
         day = '2026-01-02'

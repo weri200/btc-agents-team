@@ -105,7 +105,10 @@ class JournalTest(unittest.TestCase):
         self.bars('15m', {T0: 100})
         self.bars('4h', {**flat_4h(T0), T0 + 12 * H: (94, 103, 100)})
         with closing(journal.connect(self.path)) as db:
-            self.assertAlmostEqual(journal.outcome(db, 'BTCUSDT', T0, 'swing', 'long', T0 + 168 * H, 5)['return'], -0.05)
+            self.assertAlmostEqual(journal.outcome(db, 'BTCUSDT', T0, 'swing', 'long', T0 + 168 * H, 5, old=True)['return'], -0.05)
+            # A rules-v1 call whose 1h bars are gone is not scored on 4h bars instead.
+            self.assertEqual(journal.outcome(db, 'BTCUSDT', T0, 'swing', 'long', T0 + 168 * H, 5), {'status': 'missing'})
+        self.assertEqual([journal.legacy(v) for v in ('local-team-v6', 'rules-v1')], [True, False])
 
     def test_saving_the_same_report_twice_counts_once(self):
         journal.save_report(report('a', T0, 'wait', 'wait'), self.path)
