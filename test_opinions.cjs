@@ -149,7 +149,7 @@ console.log('Passed: sidebar collapse and expansion with accessible state.');
   vm.runInContext(source,scored);await vm.runInContext('loadScores()',scored);
   const table=node('#scores').innerHTML;
   assert.match(table,/v&lt;5&gt;/);assert.match(table,/백테스트/);assert.match(table,/실시간/);assert.match(table,/최종 판정/);assert.match(table,/2 · 1 · 1/);assert.match(table,/50%/);assert.match(table,/\+1\.23%/);assert.match(table,/—/);
-  assert.match(node('#scores-note').textContent,/ATR 2배 익절·1배 손절 중 먼저 닿는 쪽\(최대 168시간/);assert.match(node('#scores-note').textContent,/관망 -0.25점/);assert.match(table,/\+0\.38/);
+  assert.match(node('#scores-note').textContent,/ATR 2배 익절·1배 손절 중 먼저 닿는 쪽\(최대 168시간/);assert.match(node('#scores-note').textContent,/관망 -0.25점/);assert.match(node('#scores-note').textContent,/판정 직전 15분봉 종가에 진입해 단타는 4시간 뒤 종가, 스윙은 1시간봉으로/);assert.match(table,/\+0\.38/);
   const offline=vm.createContext({...context,fetch:async()=>({ok:false,json:async()=>({})})});
   vm.runInContext(source,offline);await vm.runInContext('loadScores()',offline);
   assert.match(node('#scores').innerHTML,/불러오지 못했습니다/);
