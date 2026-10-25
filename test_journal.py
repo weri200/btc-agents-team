@@ -14,7 +14,7 @@ T0 = 1792800000000  # a multiple of 4h, so 15m and 4h bars line up with it
 
 def report(rid, as_of, intraday, swing, version='v-test', atr=None):
     def horizon(verdict):
-        return {'verdict': verdict, 'agents': [{'id': 'technical', 'verdict': 'long'}]}
+        return {'verdict': verdict, 'agents': [{'id': 'rule', 'verdict': verdict}]}
     stamp = datetime.fromtimestamp(as_of / 1000, timezone.utc).isoformat(timespec='milliseconds')
     return {'id': rid, 'symbol': 'BTCUSDT', 'asOf': stamp, 'promptVersion': version, 'facts': {'4h.atr14': atr} if atr else {},
             'horizons': {'intraday': horizon(intraday), 'swing': horizon(swing)}}
@@ -71,8 +71,7 @@ class JournalTest(unittest.TestCase):
         self.assertAlmostEqual(swing['score'], (1 + journal.POINTS['wait']) / 2)  # a hit and a finished wait; missing and pending left out
         self.assertLess(journal.POINTS['miss'], journal.POINTS['wait'])
         self.assertLess(journal.POINTS['wait'], 0)
-        # Team members are scored separately from the judge.
-        self.assertEqual(self.group(groups, 'swing', 'technical')['long'], 4)
+        self.assertEqual({g['role'] for g in groups}, {'judge'})  # only the final call is saved
 
     def test_swing_exits_at_the_atr_target_or_stop(self):
         self.bars('4h', {**flat_4h(T0), T0 + 12 * H: (94, 103, 100)})
@@ -93,38 +92,6 @@ class JournalTest(unittest.TestCase):
         group = self.group(journal.scores(self.path, now=T0), 'intraday')
         self.assertEqual((group['calls'], group['pending'], group['hitRate'], group['meanReturnPct'], group['score']), (1, 1, None, None, None))
         self.assertEqual(self.group(journal.scores(self.path, now=T0 + 4 * H), 'intraday')['score'], journal.POINTS['wait'])
-
-    def test_rules_turn_team_votes_into_one_call(self):
-        def team(technical='wait', derivatives='wait', macro='wait', critic='wait'):
-            return {'technical': technical, 'derivatives': derivatives, 'macro': macro, 'critic': critic}
-        cases = [
-            (team(technical='long'), 'long', 'long', 'long'),  # waits abstain, so one side is enough
-            (team(technical='long', critic='short'), 'long', 'wait', 'wait'),  # critic opposes: blocked, a 1-1 tie
-            (team(technical='long', derivatives='short'), 'long', 'wait', 'wait'),
-            (team(technical='short', derivatives='short', critic='long'), 'short', 'wait', 'short'),
-            (team(derivatives='short'), 'wait', 'short', 'short'),
-            (team(critic='long'), 'wait', 'wait', 'long'),  # the critic counts in a majority but never leads alone
-            (team(), 'wait', 'wait', 'wait'),
-        ]
-        for votes, technical, unopposed, majority in cases:
-            with self.subTest(votes=votes):
-                self.assertEqual([journal.RULES[r][1](votes, 'wait') for r in ('technical', 'unopposed', 'majority')],
-                                 [technical, unopposed, majority])
-        self.assertEqual(journal.RULES['judge'][1](team(technical='long'), 'short'), 'short')
-        self.assertEqual(journal.unopposed(team(technical='long', macro='long'), 'wait'), 'long')
-
-    def test_rule_scores_rescore_stored_votes(self):
-        self.bars('4h', {**flat_4h(T0), T0 + 72 * H: (100, 110, 110)})  # reaches the long target of 100 + 2 x 5
-        self.bars('15m', {T0: 100, T0 + 4 * H: 110})
-        journal.save_report(report('a', T0, 'wait', 'wait', atr=5), self.path)  # the judge waited while technical said long
-        groups = journal.rule_scores(self.path, now=T0 + 169 * H)
-        swing = {g['rule']: g for g in groups if g['horizon'] == 'swing'}
-        self.assertEqual(set(swing), set(journal.RULES))
-        self.assertEqual((swing['judge']['wait'], swing['judge']['score']), (1, journal.POINTS['wait']))
-        self.assertEqual((swing['technical']['long'], swing['technical']['hits'], swing['technical']['score']), (1, 1, 1.0))
-        self.assertEqual(swing['unopposed']['score'], 1.0)
-        self.assertEqual([g['rule'] for g in groups if g['horizon'] == 'swing'], list(journal.RULES))
-        self.assertEqual(journal.rule_scores(self.path, now=T0)[0]['pending'], 1)
 
 
 if __name__ == '__main__':

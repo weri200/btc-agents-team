@@ -55,8 +55,6 @@ class Handler(SimpleHTTPRequestHandler):
             return self.json_response(200, {'holds': {h: {'interval': i, 'hours': ms // 3600000} for h, (i, ms) in journal.HOLDS.items()},
                                             'brackets': {h: {'target': tp, 'stop': sl} for h, (tp, sl) in journal.BRACKETS.items()},
                                             'points': journal.POINTS,
-                                            'rules': journal.rule_scores(collector.db_path),
-                                            'ruleLabels': {k: label for k, (label, _) in journal.RULES.items()},
                                             'groups': journal.scores(collector.db_path)})
         if parsed.path == '/api/backtests':
             query = parse_qs(parsed.query, keep_blank_values=True)
@@ -107,18 +105,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.json_response(409, {'error': '이미 다른 창에서 분석 중입니다. 진행 상황을 표시합니다.'})
         try:
             config = local_llm.load_config()
-            local_llm.progress.begin(payload['symbol'], config['roles'])
-            state = local_llm.status()
-            if not state['ready']:
-                missing = ', '.join(f"{r['name']}({r['model']})" for r in state['roles'] if not r['available'])
-                raise local_llm.AnalysisError(f'LM Studio에서 찾을 수 없는 모델: {missing}. 모델을 설치하거나 models.json을 수정하세요.')
+            local_llm.progress.begin(payload['symbol'], {'explainer': config['model']})
             snapshot = {**collector.collect(payload['symbol']), 'derivatives': collector.derivatives(payload['symbol'])}
-            if 'macro' in config['roles']:
-                try:
-                    snapshot['macro'] = macro.collect(payload['symbol'], snapshot['serverTime'])
-                except macro.MacroUnavailable as exc:
-                    # Macro context is optional: the rest of the team still runs and the seat reports why.
-                    snapshot['macro'] = {'error': str(exc)}
+            try:
+                snapshot['macro'] = macro.collect(payload['symbol'], snapshot['serverTime'])
+            except macro.MacroUnavailable as exc:
+                # News and macro only feed the explanation; the report says why they are missing.
+                snapshot['macro'] = {'error': str(exc)}
             result = local_llm.analyze(snapshot, config)
             try:
                 journal.save_report(result, collector.db_path)

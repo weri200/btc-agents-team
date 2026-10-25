@@ -31,10 +31,8 @@ def connect(path):
 
 def save_report(report, path=DB):
     as_of = int(datetime.fromisoformat(report['asOf']).timestamp() * 1000)
-    rows = []
-    for horizon, data in report['horizons'].items():
-        rows.append((report['id'], horizon, 'judge', data['verdict']))
-        rows += [(report['id'], horizon, agent['id'], agent['verdict']) for agent in data['agents']]
+    # Only the final call is kept: the code's rule makes it, so there are no team votes to score apart.
+    rows = [(report['id'], horizon, 'judge', data['verdict']) for horizon, data in report['horizons'].items()]
     with closing(connect(path)) as db, db:
         db.execute('INSERT OR REPLACE INTO reports VALUES (?,?,?,?,?,?)',
                    (report['id'], report['symbol'], as_of, report['promptVersion'], json.dumps(report, ensure_ascii=False),
@@ -138,63 +136,6 @@ def scores(path=DB, now=None):
             key = {'mode': mode, 'promptVersion': version, 'horizon': horizon, 'role': role}
             tally(groups, key, verdict, outcome(db, symbol, as_of, horizon, verdict, now, atr))
     return sorted(summarize(groups), key=lambda g: (g['mode'], g['promptVersion'], g['horizon'], g['role'] != 'judge', g['role']))
-
-
-# Ways to turn the team's verified votes into one call. A wait is an abstention, not a vote, so a seat with no data
-# (the macro seat in a backtest) or a critic that only raised doubts does not block the analysts who did take a side.
-ANALYSTS = ('technical', 'derivatives', 'macro')
-OPPOSITE = {'long': 'short', 'short': 'long'}
-
-
-def unopposed(team, judge):
-    """The one direction analysts hold, if no team member (critic included) takes the other side."""
-    sides = {team.get(role) for role in ANALYSTS} - {'wait', None}
-    if len(sides) != 1:
-        return 'wait'
-    side = sides.pop()
-    return 'wait' if OPPOSITE[side] in team.values() else side
-
-
-def majority(team, judge):
-    """Whichever of long and short more team members hold, critic included; a tie is a wait."""
-    votes = list(team.values())
-    longs, shorts = votes.count('long'), votes.count('short')
-    return 'long' if longs > shorts else 'short' if shorts > longs else 'wait'
-
-
-RULES = {
-    'judge': ('LLM 종합 판정자', lambda team, judge: judge),
-    'technical': ('기술 분석가만 따름', lambda team, judge: team.get('technical', 'wait')),
-    'unopposed': ('반대 없는 방향', unopposed),
-    'majority': ('다수결 · 관망은 기권', majority),
-}
-
-
-def rule_scores(path=DB, now=None):
-    """Every rule in RULES applied to the stored team votes, scored like scores() per mode, prompt version and horizon."""
-    now = now or int(datetime.now().timestamp() * 1000)
-    calls = {}
-    with closing(connect(path)) as db:
-        ensure_candles(db)
-        query = (f'SELECT r.id, r.symbol, r.as_of, r.mode, r.prompt_version, v.horizon, v.role, v.verdict, {ATR_SQL} '
-                 'FROM verdicts v JOIN reports r ON r.id = v.report_id')
-        for rid, symbol, as_of, mode, version, horizon, role, verdict, atr in db.execute(query).fetchall():
-            call = calls.setdefault((rid, horizon), {'symbol': symbol, 'asOf': as_of, 'mode': mode, 'version': version, 'atr': atr, 'team': {}})
-            if role == 'judge':
-                call['judge'] = verdict
-            else:
-                call['team'][role] = verdict
-        groups = {}
-        for (_, horizon), call in calls.items():
-            seen = {}  # rules often agree; score each distinct verdict once
-            for rule, (_, decide) in RULES.items():
-                verdict = decide(call['team'], call.get('judge', 'wait'))
-                if verdict not in seen:
-                    seen[verdict] = outcome(db, call['symbol'], call['asOf'], horizon, verdict, now, call['atr'])
-                key = {'mode': call['mode'], 'promptVersion': call['version'], 'horizon': horizon, 'rule': rule}
-                tally(groups, key, verdict, seen[verdict])
-    order = list(RULES)
-    return sorted(summarize(groups), key=lambda g: (g['mode'], g['promptVersion'], g['horizon'], order.index(g['rule'])))
 
 
 def backtests(path=DB, now=None, limit=100):

@@ -1,11 +1,5 @@
 {
-  "note": "역할마다 LM Studio의 모델 ID를 적습니다. ID는 `lms ls` 또는 /api/llm 응답에서 확인하세요. macro(뉴스·거시 분석가)는 선택이며, 빼거나 OpenBB 자료가 없으면 관망으로 고정됩니다. 같은 모델을 여러 역할에 쓰면 경고만 표시합니다.",
+  "note": "판정은 signals.py의 코드 규칙이 내고, 이 모델은 판정 이유와 규칙 밖의 위험(수급·변동성·뉴스)을 설명만 합니다. LM Studio의 모델 ID는 `lms ls` 또는 /api/llm 응답에서 확인하세요.",
   "temperature": 0.1,
-  "roles": {
-    "technical": "mistralai/mistral-nemo-instruct-2407",
-    "derivatives": "microsoft/phi-4",
-    "macro": "exaone-3.5-7.8b-instruct",
-    "critic": "google/gemma-4-12b",
-    "judge": "huihui-qwen3.8-27b-abliterated"
-  }
+  "model": "huihui-qwen3.8-27b-abliterated"
 }

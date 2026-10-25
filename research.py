@@ -1,6 +1,6 @@
 """4h rule research: candidate rules decide at past 4h closes, and each trade is scored by whether its target or its stop
 is hit first on 1h bars. No models run, so months of moments take minutes. Run: python research.py --symbol BTCUSDT --days 180
-Facts come from the same server indicators the models see (indicators.compute), so a rule found here can be handed to them."""
+Facts come from the same server indicators the live analysis uses (indicators.compute), so a rule found here can go into signals.py as is."""
 import argparse
 from bisect import bisect_left
 import itertools
@@ -11,6 +11,8 @@ import time
 import backtest
 import indicators
 import market
+import signals
+from signals import breakout, side, trend
 from market import BAR_COUNT, INTERVALS, MarketError
 
 H = 3600000
@@ -91,27 +93,9 @@ def bands(bars, period=20, width=2, prefix='bb'):
     return out
 
 
-def side(*values):
-    """+1 or -1 when every value is on that side of zero, otherwise 0."""
-    if all(v is not None and v > 0 for v in values):
-        return 1
-    if all(v is not None and v < 0 for v in values):
-        return -1
-    return 0
-
-
-def trend(f):
-    return side(f.get('1d.change20Pct'), f.get('1d.closeVsSma50Pct'))
-
-
 def momentum(f):
     t = trend(f)
     return t if t and side(f.get('4h.closeVsSma20Pct'), f.get('4h.change1Pct')) == t else 0
-
-
-def breakout(f):
-    t = trend(f)
-    return t if (t == 1 and f['4h.close'] > f.get('4h.high20', float('inf'))) or (t == -1 and f['4h.close'] < f.get('4h.low20', 0)) else 0
 
 
 def pullback(f):
@@ -146,7 +130,7 @@ RULES = {
     'momentum-oi': ('1일 추세 + 4시간 모멘텀 + 미결제약정 증가', lambda f: momentum(f) if f.get('4h.oiChange1Pct', 0) > 0 else 0),
     'momentum-funding': ('1일 추세 + 4시간 모멘텀, 같은 쪽 펀딩 과열 제외', lambda f: momentum(f) if momentum(f) * f['market.fundingRatePct'] < 0.02 else 0),
     'breakout': ('1일 추세 + 4시간 20봉 돌파', breakout),
-    'breakout-volume': ('1일 추세 + 4시간 20봉 돌파 + 거래량 증가 (현재 스윙 규칙)', lambda f: breakout(f) if f.get('4h.volumeRatio20', 0) > 1 else 0),
+    'breakout-volume': ('1일 추세 + 4시간 20봉 돌파 + 거래량 증가 (현재 스윙 규칙)', lambda f: signals.direction(f, 'swing')),
     'pullback': ('1일 추세 + 4시간 RSI 눌림', pullback),
     'cci-cross': ('CCI ±100 되돌림 교차만', cci_cross),
     '4bc': ('4BC: 4시간 CCI ±100 되돌림 교차, 볼린저 익절·손절', cci_cross),
@@ -380,7 +364,7 @@ if (last) chart.timeScale().setVisibleRange({ from: last.entry - 30 * 86400, to:
 def report(data, min_trades, top, log=print):
     log(f"시점 {data['moments']}개 (건너뜀 {data['skipped']}) · 학습 구간 ~ {market.iso(data['split'])[:10]} · 검증 구간 그 이후")
     log('규칙 | 목표·손절(ATR배; 추적은 추적 손절 ATR배, 4BC는 볼린저 밴드)·보유 | 학습: 진입·적중률·평균순수익 / 단일 포지션 진입·누적·최대낙폭 | 검증: 같음')
-    fmt = lambda p: (f"{p['trades']:4d} · {'—' if p['hitRate'] is None else format(p['hitRate'], '4.0%')} · {'—' if p['meanNetPct'] is None else format(p['meanNetPct'], '+.2f') + '%'}"
+    fmt = lambda p: (f"{p['trades']:4d} · {'-' if p['hitRate'] is None else format(p['hitRate'], '4.0%')} · {'-' if p['meanNetPct'] is None else format(p['meanNetPct'], '+.2f') + '%'}"
                      f" / {p['solo']['trades']:3d} · {p['solo']['returnPct']:+.1f}% · -{p['solo']['maxDrawdownPct']:.1f}%")
     # Ranked by the train-period solo return: hit rate alone buries trend exits, which win rarely but big.
     ranked = sorted(data['results'], key=lambda g: (g['train']['trades'] >= min_trades, g['train']['solo']['returnPct']), reverse=True)
