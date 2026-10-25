@@ -65,7 +65,8 @@ class AnalyzeTests(unittest.TestCase):
             self.assertEqual(data['explainer'], {'model': 'model-a'})
             self.assertEqual([a['id'] for a in data['agents']], ['rule'])
             self.assertEqual(data['agents'][0]['evidence'], signals.checks(facts, h))
-        self.assertTrue(all(k.split('.')[0] in ('market', '5m', '15m', '1h') for k in sent['horizons']['intraday']['facts']))
+        self.assertEqual(list(report['horizons']), ['swing'])  # rules-v2 makes the swing call only
+        self.assertEqual(report['horizons']['swing']['label'], '4시간 추세 돌파')
         self.assertTrue(all(k.split('.')[0] in ('market', '4h', '1d') for k in sent['horizons']['swing']['facts']))
         self.assertNotIn('verdict', json.dumps(llm.SCHEMA))  # the model has no field to make a call in
         self.assertEqual(fake.calls[0]['reasoning_effort'], 'none')
@@ -99,7 +100,7 @@ class AnalyzeTests(unittest.TestCase):
         for fake in (truncated, not_json):
             with self.subTest(fake=fake.__name__):
                 report = self.analyze(fake)
-                self.assertIsNone(report['horizons']['intraday']['explainer'])
+                self.assertIsNone(report['horizons']['swing']['explainer'])
                 self.assertTrue(any('model-a' in w for w in report['warnings']))
 
     def test_retries_once(self):

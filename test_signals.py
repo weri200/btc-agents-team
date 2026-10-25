@@ -6,7 +6,7 @@ import signals
 
 
 def facts(**changes):
-    """An up-trend 4h close above its 20-bar high on heavy volume: a swing long, while intraday stays flat."""
+    """An up-trend 4h close above its 20-bar high on heavy volume: a swing long."""
     base = {'1d.change20Pct': 3.0, '1d.closeVsSma50Pct': 1.0, '4h.close': 110.0, '4h.high20': 105.0, '4h.low20': 90.0,
             '4h.volumeRatio20': 1.5, '4h.atr14': 2.0,
             '1h.change20Pct': 1.0, '1h.closeVsSma50Pct': -0.5, '15m.close': 100.0, '15m.high20': 101.0, '15m.low20': 99.0,
@@ -24,10 +24,6 @@ class SignalsTest(unittest.TestCase):
         self.assertEqual(signals.decide(down, 'swing'), 'short')
         self.assertEqual(signals.decide(facts(**{'4h.close': None}), 'swing'), 'wait')
 
-    def test_intraday_uses_the_1h_trend_and_15m_breakout(self):
-        self.assertEqual(signals.decide(facts(), 'intraday'), 'wait')  # 1h trend mixed
-        self.assertEqual(signals.decide(facts(**{'1h.closeVsSma50Pct': 0.5, '15m.close': 102.0}), 'intraday'), 'long')
-
     def test_research_scores_the_same_swing_rule(self):
         for f in (facts(), facts(**{'4h.volumeRatio20': 0.5}), facts(**{'1d.change20Pct': -1.0})):
             self.assertEqual(research.RULES['breakout-volume'][1](f), signals.direction(f, 'swing'))
@@ -38,7 +34,7 @@ class SignalsTest(unittest.TestCase):
         self.assertIn('위', lines[0])
         self.assertIn('고점 돌파', lines[1])
         self.assertIn('0.18배 (부족)', lines[2])
-        self.assertIn('자료 없음', signals.checks({}, 'intraday')[1])
+        self.assertIn('자료 없음', signals.checks({}, 'swing')[1])
         # The explainer's wording of the volume ratio draws the same line as the rule.
         for ratio, word in ((1.2, '평소보다 많음'), (1.0, '평소 이하')):
             self.assertIn('충분' if ratio > 1 else '부족', signals.checks(facts(**{'4h.volumeRatio20': ratio}), 'swing')[2])
@@ -46,7 +42,7 @@ class SignalsTest(unittest.TestCase):
         self.assertIn('진입 100 · 익절 104 · 손절 98', signals.exit_plan(facts(), 'swing', 'long'))  # 15m close, 4h ATR
         self.assertIn('익절 96 · 손절 102', signals.exit_plan(facts(), 'swing', 'short'))
         self.assertNotIn('익절 1', signals.exit_plan(facts(), 'swing', 'wait'))
-        self.assertIn('4시간이 지나면', signals.exit_plan(facts(), 'intraday', 'long'))
+        self.assertEqual(list(signals.FRAMES), ['swing'])  # the intraday call was dropped in rules-v2
 
 
 if __name__ == '__main__':

@@ -1,12 +1,13 @@
-"""Trading calls made by code, never by a model: each horizon's rule reads the server facts and returns long, short or wait.
-Swing is research.py's 'breakout-volume' rule; intraday is the same rule one step down (1h trend, 15m breakout).
+"""Trading calls made by code, never by a model: the rule reads the server facts and returns long, short or wait.
+It is research.py's 'breakout-volume' rule. The intraday rule (1h trend, 15m breakout) was dropped in rules-v2: it had no
+target or stop, fees ate most of a 15m move, and it was never validated.
 README.md explains why the models no longer decide."""
 import journal
 
-VERSION = 'rules-v1'  # saved as each report's promptVersion; bump it whenever a rule changes so scores stay apart
+VERSION = 'rules-v2'  # saved as each report's promptVersion; bump it whenever a rule changes so scores stay apart
 # horizon: (trend frame, breakout frame)
-FRAMES = {'intraday': ('1h', '15m'), 'swing': ('1d', '4h')}
-NAMES = {'intraday': '1시간 추세 + 15분 20봉 돌파 + 거래량 증가', 'swing': '1일 추세 + 4시간 20봉 돌파 + 거래량 증가'}
+FRAMES = {'swing': ('1d', '4h')}
+NAMES = {'swing': '1일 추세 + 4시간 20봉 돌파 + 거래량 증가'}
 VERDICTS = {1: 'long', -1: 'short', 0: 'wait'}
 
 

@@ -143,7 +143,7 @@ class BacktestTest(unittest.TestCase):
         self.assertEqual(saved, 2)
         with closing(sqlite3.connect(self.collector.db_path)) as db:
             rows = db.execute("SELECT r.payload, v.horizon, v.verdict FROM reports r JOIN verdicts v ON v.report_id = r.id").fetchall()
-        self.assertEqual(len(rows), 4)
+        self.assertEqual(len(rows), 2)  # one swing call per moment
         for payload, horizon, verdict in rows:
             report = json.loads(payload)
             self.assertEqual((report['mode'], report['promptVersion']), ('backtest', backtest.signals.VERSION))
