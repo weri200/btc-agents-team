@@ -323,7 +323,9 @@ def analyze(snapshot, config=None):
         progress.role('explainer', 'running')
         try:
             explained = chat(config['model'], payload, config['temperature'], news)
-            progress.role('explainer', 'done')
+            # A one-line opinion for the progress card, so every open window sees the gist before opening the report.
+            swing = explained['swing']
+            progress.role('explainer', 'done', f"{LABELS[calls['swing']['verdict']]} · AI 주의 {swing['caution']} — {swing['summary']}")
         except AnalysisError as exc:
             # The calls never depended on the model, so a failed explanation only leaves the code's own text.
             progress.role('explainer', 'failed', str(exc))
