@@ -262,22 +262,24 @@ class ServerTests(unittest.TestCase):
         with patch.object(server.local_llm, 'load_config', return_value={'model': 'm', 'temperature': 0.1}), \
                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}), \
                 patch.object(server.collector, 'derivatives', return_value={}), \
-                patch.object(server.macro, 'collect', return_value={}), \
+                patch.object(server.macro, 'collect', return_value={}), patch.object(server.news, 'collect', return_value={'items': [], 'warnings': []}) as news_feed, \
                 patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}),                 patch.object(server.journal, 'save_report') as save:
             status, body = self.post()
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(body)['id'], 'test')
             save.assert_called_once_with({'id': 'test'}, server.collector.db_path)
+            news_feed.assert_called_once_with(NOW)  # headlines are fetched for the explainer
         # A journal that cannot save still returns the finished report.
-        with patch.object(server.local_llm, 'load_config', return_value={'model': 'm', 'temperature': 0.1}),                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}),                 patch.object(server.collector, 'derivatives', return_value={}),                 patch.object(server.macro, 'collect', return_value={}),                 patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}),                 patch.object(server.journal, 'save_report', side_effect=sqlite3.OperationalError('locked')):
+        with patch.object(server.local_llm, 'load_config', return_value={'model': 'm', 'temperature': 0.1}),                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}),                 patch.object(server.collector, 'derivatives', return_value={}),                 patch.object(server.macro, 'collect', return_value={}), patch.object(server.news, 'collect', return_value={'items': [], 'warnings': []}) as news_feed,                 patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}),                 patch.object(server.journal, 'save_report', side_effect=sqlite3.OperationalError('locked')):
             self.assertEqual(self.post()[0], 200)
         with patch.object(server.collector, 'collect', side_effect=market.MarketError('offline')):
             self.assertEqual(self.post()[0], 502)
         # A bad models.json still gives the code's calls, without the explanation.
-        with patch.object(server.local_llm, 'load_config', side_effect=server.local_llm.AnalysisError('models.json 오류.')),                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}),                 patch.object(server.collector, 'derivatives', return_value={}),                 patch.object(server.macro, 'collect', return_value={}),                 patch.object(server.local_llm, 'analyze', return_value={'id': 'test', 'warnings': []}) as analyze,                 patch.object(server.journal, 'save_report'):
+        with patch.object(server.local_llm, 'load_config', side_effect=server.local_llm.AnalysisError('models.json 오류.')),                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}),                 patch.object(server.collector, 'derivatives', return_value={}),                 patch.object(server.macro, 'collect', return_value={}), patch.object(server.news, 'collect', return_value={'items': [], 'warnings': []}) as news_feed,                 patch.object(server.local_llm, 'analyze', return_value={'id': 'test', 'warnings': []}) as analyze,                 patch.object(server.journal, 'save_report'):
             status, body = self.post()
         self.assertEqual(status, 200)
         self.assertIsNone(analyze.call_args.args[1])
+        news_feed.assert_not_called()  # no explainer, so no headlines to fetch
         self.assertIn('해설 없이 규칙 판정만', json.loads(body)['warnings'][0])
         self.assert_released()
 
@@ -289,7 +291,7 @@ class ServerTests(unittest.TestCase):
             with patch.object(server.local_llm, 'load_config', return_value={'model': 'm', 'temperature': 0.1}), \
                     patch.object(server.collector, 'collect', return_value={'serverTime': NOW}), \
                     patch.object(server.collector, 'derivatives', return_value={}), \
-                    patch.object(server.macro, 'collect', return_value={}), \
+                    patch.object(server.macro, 'collect', return_value={}), patch.object(server.news, 'collect', return_value={'items': [], 'warnings': []}) as news_feed, \
                     patch.object(server.local_llm, 'analyze', return_value={'id': 'done-report'}),                     patch.object(server.journal, 'save_report'):
                 self.assertEqual(self.post()[0], 200)
             state = json.loads(self.get('/api/progress')[1])

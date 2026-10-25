@@ -10,6 +10,7 @@ from market import Collector, MarketError
 import journal
 import local_llm
 import macro
+import news
 
 DIST = Path(__file__).resolve().parent / 'dist'
 ASSETS = { '/' + p.name for p in DIST.iterdir() if p.is_file() and p.suffix in ('.html', '.js', '.css') }
@@ -116,6 +117,8 @@ class Handler(SimpleHTTPRequestHandler):
             except macro.MacroUnavailable as exc:
                 # News and macro only feed the explanation; the report says why they are missing.
                 snapshot['macro'] = {'error': str(exc)}
+            if config:
+                snapshot['news'] = news.collect(snapshot['serverTime'])  # coin headlines only feed the explainer's review
             result = local_llm.analyze(snapshot, config)
             if problem:
                 result['warnings'].append(f'{problem} 해설 없이 규칙 판정만 냈습니다.')
