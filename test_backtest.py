@@ -42,11 +42,12 @@ def day_csv(day):
     return '\n'.join([HEADER, *rows])
 
 
-def report(snapshot, config):
+def report(snapshot):
     def horizon():
-        return {'verdict': 'long', 'agents': [{'id': 'technical', 'verdict': 'short'}]}
+        return {'verdict': 'long', 'agents': [{'id': 'rule', 'verdict': 'long'}]}
+    # An ATR of 1: a few hours of the steady climb reach the swing target.
     return {'id': f"r{snapshot['serverTime']}", 'symbol': snapshot['symbol'], 'asOf': market.iso(snapshot['serverTime']),
-            'mode': 'analysis', 'promptVersion': 'v-test', 'horizons': {'intraday': horizon(), 'swing': horizon()}}
+            'mode': 'analysis', 'promptVersion': 'v-test', 'facts': {'4h.atr14': 1.0}, 'horizons': {'intraday': horizon(), 'swing': horizon()}}
 
 
 class BacktestTest(unittest.TestCase):
@@ -63,56 +64,58 @@ class BacktestTest(unittest.TestCase):
     def run_backtest(self, limit=None):
         with patch.object(self.collector, 'request', side_effect=request), \
                 patch('backtest.local_llm.analyze', side_effect=report) as analyze, \
-                patch('backtest.local_llm.PROMPT_VERSION', 'v-test'):
-            saved = backtest.run('BTCUSDT', 10, 4, limit, self.collector, config={}, now=NOW, folder=self.archive, log=lambda line: None)
+                patch('backtest.signals.VERSION', 'v-test'):
+            saved = backtest.run('BTCUSDT', 10, 4, limit, self.collector, now=NOW, folder=self.archive, log=lambda line: None)
         return saved, analyze
+
+    def test_archive_outage_takes_the_last_value_within_30_minutes(self):
+        day = '2026-01-05'
+        start = int(backtest.datetime.fromisoformat(day + 'T00:00:00+00:00').timestamp() * 1000)
+        lines = day_csv(day).splitlines()
+        for i in range(1 + 140, 1 + 160):  # 11:40 to 13:15 read as zero, like Binance's 2026-10-15 outage
+            parts = lines[i].split(',')
+            lines[i] = ','.join(parts[:2] + ['0E-16', '0E-16'] + parts[4:])
+        (self.archive / 'BTCUSDT' / f'{day}.csv').write_text('\n'.join(lines), encoding='utf-8')
+        five = 300000
+        self.assertEqual(backtest.metrics_at('BTCUSDT', start + 144 * five, self.archive)['create_time'], f'{day} 11:35:00')
+        with self.assertRaises(market.MarketError):
+            backtest.metrics_at('BTCUSDT', start + 150 * five, self.archive)
 
     def test_moments_newest_first_inside_the_scorable_range(self):
         moments = backtest.moments(NOW, 4 * H, 10)
         self.assertTrue(all(m % backtest.STEP == 0 for m in moments))
         self.assertEqual(moments, sorted(moments, reverse=True))
-        self.assertLessEqual(moments[0], NOW - 72 * H)
+        self.assertLessEqual(moments[0], NOW - 7 * 24 * H)  # the swing hold is over
         self.assertGreater(moments[-1], NOW - 10 * 24 * H)
 
-    def test_scale_is_repeatable_and_far_from_one(self):
-        scales = [backtest.scale_of(at) for at in range(0, 400 * backtest.STEP, backtest.STEP)]
-        self.assertEqual(scales[:5], [backtest.scale_of(at) for at in range(0, 5 * backtest.STEP, backtest.STEP)])
-        self.assertTrue(all(0.5 <= s <= 2 and abs(s - 1) > 0.09 for s in scales))
-
-    def test_models_see_earlier_data_scaled_and_undated_while_scoring_uses_real_prices(self):
+    def test_rules_see_only_earlier_data_and_calls_are_scored(self):
         saved, analyze = self.run_backtest(limit=3)
         self.assertEqual(saved, 3)
         for call in analyze.call_args_list:
             sent = call.args[0]
-            at, scale = sent['serverTime'], backtest.scale_of(sent['serverTime'])
-            self.assertTrue(sent['hideDate'])
+            at = sent['serverTime']
             self.assertTrue(all(b['closeTime'] < at for bars in sent['candles'].values() for b in bars))
             self.assertTrue(all(r['time'] < at for r in sent['derivatives']['funding']))
             self.assertTrue(all(r['time'] < at for m in sent['derivatives']['periods'].values() for rows in m.values() for r in rows))
             last = sent['candles']['5m'][-1]
-            self.assertAlmostEqual(float(last['close']), float(price(last['openTime'] + 300000)) * scale, places=4)
+            self.assertEqual(last['close'], price(last['openTime'] + 300000))
             self.assertAlmostEqual(float(sent['ticker']['price']), float(last['close']))
             self.assertEqual(sent['derivatives']['periods']['1h']['taker'][-1]['buySellRatio'], '0.6667')
             self.assertEqual(sent['openInterest']['openInterest'], str(1000 + (at - 300000) % (24 * H) // 300000))  # the row 5 minutes before
-            self.assertIn('재현할 수 없어', sent['macro']['error'])
-
-        with closing(sqlite3.connect(self.collector.db_path)) as db:
-            self.assertEqual({r[0] for r in db.execute("SELECT json_extract(payload,'$.priceScale') FROM reports")},
-                             {backtest.scale_of(c.args[0]['serverTime']) for c in analyze.call_args_list})
+            self.assertEqual(len(call.args), 1)  # no model config: a backtest never runs the explainer
         groups = journal.scores(self.collector.db_path, now=NOW)
         judge = next(g for g in groups if g['role'] == 'judge' and g['horizon'] == 'swing')
         self.assertEqual((judge['mode'], judge['calls'], judge['scored'], judge['hits'], judge['missing']), ('backtest', 3, 3, 3, 0))
-        technical = next(g for g in groups if g['role'] == 'technical' and g['horizon'] == 'intraday')
-        self.assertEqual((technical['scored'], technical['hits']), (3, 0))
+        self.assertEqual({g['role'] for g in groups}, {'judge'})
 
     def test_listing_and_one_report_carry_outcomes(self):
         self.run_backtest(limit=2)
-        journal.save_report({**report({'serverTime': NOW - 100 * H, 'symbol': 'BTCUSDT'}, {}), 'id': 'live'}, self.collector.db_path)
+        journal.save_report({**report({'serverTime': NOW - 100 * H, 'symbol': 'BTCUSDT'}), 'id': 'live'}, self.collector.db_path)
         listed = journal.backtests(self.collector.db_path, now=NOW)
         self.assertEqual(listed['total'], 2)  # the live report is left out
         newest = listed['reports'][0]
         self.assertGreater(newest['asOf'], listed['reports'][1]['asOf'])
-        self.assertEqual(newest['priceScale'], backtest.scale_of(newest['asOf']))
+        self.assertIsNone(newest['priceScale'])
         swing = newest['horizons']['swing']
         self.assertEqual((swing['verdict'], swing['status'], swing['points']), ('long', 'hit', 1.0))
         self.assertAlmostEqual(swing['return'], swing['exit'] / swing['entry'] - 1)

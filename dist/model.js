@@ -2,20 +2,14 @@
   'use strict';
   const labels={long:'롱 우세',short:'숏 우세',wait:'관망'};
   function demo(symbol='BTCUSDT'){
-    const agent=(id,name,role,verdict,summary,evidence,counter,invalidation)=>({id,name,role,verdict,summary,evidence,counter,invalidation,model:'데모 · 모델 미실행',sources:[{title:'화면 설명용 가상 시나리오',url:null,asOf:'2026-10-22T00:00:00+09:00'}]});
-    return {schemaVersion:1,id:'demo-'+symbol,exchange:'Binance',market:'USDⓈ-M perpetual',symbol,asOf:'2026-10-22T00:00:00+09:00',mode:'demo',promptVersion:'demo-v1',horizons:{
-      intraday:{label:'단타',timeframes:'5분 · 15분 · 1시간',verdict:'wait',summary:'단기 반등 의견은 있지만, 추세 확인과 수급 근거가 충분하지 않은 예시입니다.',agreement:'기술적 반등 가능성은 검토하되, 진입 판단에는 추가 데이터가 필요합니다.',disagreement:'기술 분석은 롱 우세, 수급·뉴스·반대 검토는 관망입니다.',condition:'마감된 봉의 돌파와 거래량을 함께 확인하고, 확인되지 않으면 관망을 유지합니다.',agents:[
-        agent('technical','기술 분석가','가격 · 추세 · 모멘텀','long','단기 반등 가능성. 추세 전환 확정은 보류합니다.',['가정: 단기 저점이 높아지는 구간입니다.','가정: 중기 추세 확인은 아직 끝나지 않았습니다.'],'횡보장에서 돌파 신호가 실패할 수 있습니다.','반등 구조가 무너지거나 마감 봉이 돌파를 확인하지 못하면 의견을 철회합니다.'),
-        agent('derivatives','파생상품 분석가','펀딩 · 미결제약정 · 수급','wait','가격과 미결제약정의 동행 여부를 더 확인해야 합니다.',['가정: 반등이 신규 매수인지 숏 청산인지 구별되지 않습니다.','실제 펀딩비·미결제약정 데이터는 연결되지 않았습니다.'],'가격 상승만 보고 신규 롱 유입으로 해석할 수 없습니다.','시각이 일치하는 펀딩·미결제약정 자료가 없으면 판정을 보류합니다.'),
-        agent('macro','뉴스·거시 분석가','이벤트 · 거시 환경','wait','확인된 이벤트 자료가 없어 방향 판단을 보류합니다.',['실제 뉴스 또는 경제 일정은 조회하지 않았습니다.','기사 공개 시각과 원문을 확인한 뒤 분석해야 합니다.'],'오래된 뉴스나 출처 없는 게시물이 판단을 왜곡할 수 있습니다.','신뢰 가능한 새 정보가 확인되면 재분석합니다.'),
-        agent('critic','반대 검토자','반론 · 실패 조건','wait','단기 반등에 동의하더라도 진입 근거는 부족합니다.',['분석가 간 의견이 갈리는 예시입니다.','수수료와 슬리피지를 차감한 기대값은 검증되지 않았습니다.'],'신호 확인을 기다리면 일부 가격 움직임을 놓칠 수 있습니다.','데이터 품질과 거래 비용을 검증한 뒤 재평가합니다.')
-      ]},
-      swing:{label:'스윙',timeframes:'4시간 · 1일',verdict:'short',summary:'상위 시간대의 약세 지속을 가정한 예시입니다. 단타의 반등 가능성과 구분해서 봅니다.',agreement:'상위 추세가 회복되기 전까지 보수적으로 접근한다는 의견입니다.',disagreement:'기술·수급은 숏 우세지만, 뉴스와 반대 검토는 근거 부족으로 관망합니다.',condition:'일봉 추세 회복이 확인되면 숏 우세 판단을 철회하고 다시 분석합니다.',agents:[
-        agent('technical','기술 분석가','가격 · 추세 · 모멘텀','short','상위 시간대 하락 구조가 유지되는 상황을 가정합니다.',['가정: 일봉의 고점이 낮아지고 있습니다.','가정: 4시간 봉의 반등이 상위 추세를 바꾸지 못했습니다.'],'단기 반등이 강한 추세 전환으로 이어질 수 있습니다.','일봉 기준 추세 회복이 확인되면 숏 우세를 철회합니다.'),
-        agent('derivatives','파생상품 분석가','펀딩 · 미결제약정 · 수급','short','반등 중 롱 쏠림이 발생한 가상의 수급 상황입니다.',['가정: 반등 과정에서 레버리지 롱이 증가했습니다.','실제 수급 수치 없이 만든 화면 설명용 의견입니다.'],'과열 신호만으로 가격 하락을 보장할 수 없습니다.','현물 매수 주도 상승 등 반대 자료가 확인되면 재평가합니다.'),
-        agent('macro','뉴스·거시 분석가','이벤트 · 거시 환경','wait','스윙 기간의 거시 이벤트를 확인할 자료가 없습니다.',['금리·유동성 관련 실제 자료는 조회하지 않았습니다.','OpenBB 데이터 공급자 연결이 필요합니다.'],'큰 이벤트가 기술적 추세를 빠르게 바꿀 수 있습니다.','자료가 없거나 오래되면 방향 판정을 보류합니다.'),
-        agent('critic','반대 검토자','반론 · 실패 조건','wait','방향 의견과 실제 진입의 유리함은 별도입니다.',['진입 위치·손절·보유 중 펀딩 비용은 미검증입니다.','예시의 다수 의견을 승률로 해석하지 않습니다.'],'과도한 관망은 유효한 추세 기회를 놓칠 수 있습니다.','순차 모의매매와 비용 검증을 통과하면 다시 검토합니다.')
-      ]}
+    const source=[{title:'화면 설명용 가상 시나리오',url:null,asOf:'2026-10-22T00:00:00+09:00'}];
+    const horizon=(label,timeframes,rule,verdict,summary,checks,risk,exit)=>({label,timeframes,rule,verdict,summary,agreement:checks.join(' · '),disagreement:risk,condition:exit,explainer:null,
+      agents:[{id:'rule',name:'규칙 판정',role:rule,verdict,summary,evidence:checks,counter:risk,invalidation:exit,model:'데모 · 코드 미실행',sources:source}]});
+    return {schemaVersion:1,id:'demo-'+symbol,exchange:'Binance',market:'USDⓈ-M perpetual',symbol,asOf:'2026-10-22T00:00:00+09:00',mode:'demo',promptVersion:'demo-v2',horizons:{
+      intraday:horizon('단타','5분 · 15분 · 1시간','1시간 추세 + 15분 20봉 돌파 + 거래량 증가','wait','가정: 1시간 추세는 위지만 15분 돌파가 없어 관망인 예시입니다.',
+        ['1h 추세: 위 (가정)','15m 20봉 돌파: 없음 (가정)','15m 거래량: 평소의 0.8배 (부족, 가정)'],'가정: 펀딩이 높아 롱 쏠림이 보이는 예시입니다.','진입 뒤 4시간이 지나면 그때 15m 종가로 청산합니다.'),
+      swing:horizon('스윙','4시간 · 1일','1일 추세 + 4시간 20봉 돌파 + 거래량 증가','short','가정: 1일 하락 추세에서 4시간 저점을 거래량과 함께 이탈한 예시입니다.',
+        ['1d 추세: 아래 (가정)','4h 20봉 돌파: 저점 이탈 (가정)','4h 거래량: 평소의 1.6배 (충분, 가정)'],'가정: 큰 경제 지표 발표가 가까워 변동성이 커질 수 있는 예시입니다.','4시간 ATR 2배 익절 · 1배 손절 중 먼저 닿는 쪽, 최대 7일 보유.')
     }};
   }
   function validate(r){

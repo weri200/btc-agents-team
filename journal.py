@@ -7,9 +7,13 @@ from pathlib import Path
 
 from market import DB, INTERVALS
 
-# How long each horizon's call is held before it is scored, and which stored bars measure it.
-# shortcut: fixed holds and close-to-close returns without fees or stops; add those when the rules state them.
-HOLDS = {'intraday': ('15m', 4 * 3600000), 'swing': ('4h', 72 * 3600000)}
+# How long each horizon's call is held at most before it is scored, and which stored bars measure it.
+# shortcut: returns leave out fees; subtract them if scores are read as account returns.
+HOLDS = {'intraday': ('15m', 4 * 3600000), 'swing': ('4h', 7 * 24 * 3600000)}
+# Swing calls follow research.py's 'breakout-volume' rule: out at 2 x the 4h ATR in profit or 1 x in loss, whichever comes first.
+BRACKETS = {'swing': (2.0, 1.0)}
+# The 4h ATR the models saw, in real prices (backtest reports saw prices times priceScale).
+ATR_SQL = """json_extract(r.payload, '$.facts."4h.atr14"') / coalesce(json_extract(r.payload, '$.priceScale'), 1)"""
 # Points per call: a wait costs less than a wrong call, so waiting is never free but beats guessing wrong.
 POINTS = {'hit': 1.0, 'miss': -1.0, 'wait': -0.25}
 
@@ -27,10 +31,8 @@ def connect(path):
 
 def save_report(report, path=DB):
     as_of = int(datetime.fromisoformat(report['asOf']).timestamp() * 1000)
-    rows = []
-    for horizon, data in report['horizons'].items():
-        rows.append((report['id'], horizon, 'judge', data['verdict']))
-        rows += [(report['id'], horizon, agent['id'], agent['verdict']) for agent in data['agents']]
+    # Only the final call is kept: the code's rule makes it, so there are no team votes to score apart.
+    rows = [(report['id'], horizon, 'judge', data['verdict']) for horizon, data in report['horizons'].items()]
     with closing(connect(path)) as db, db:
         db.execute('INSERT OR REPLACE INTO reports VALUES (?,?,?,?,?,?)',
                    (report['id'], report['symbol'], as_of, report['promptVersion'], json.dumps(report, ensure_ascii=False),
@@ -46,17 +48,46 @@ def close_at(db, symbol, interval, at):
     return float(json.loads(row[0])['close']) if row else None
 
 
-def outcome(db, symbol, as_of, horizon, verdict, now):
-    """How one call came out once its hold is over: wait, missing, or hit/miss with the entry and exit closes and the signed return."""
+def bracket_exit(db, symbol, interval, as_of, hold, entry, direction, atr, tp, sl):
+    """Exit price of a call held with an ATR target and stop: the level the first stored bar reaches (a bar that touches both
+    counts as the stop, since one bar cannot tell which came first), else the close when the hold ends.
+    None when the ATR or any bar of the hold is missing."""
+    step = INTERVALS[interval]
+    first, last = (as_of + 1) // step * step, (as_of + hold + 1) // step * step - step
+    rows = db.execute('SELECT payload FROM candles WHERE symbol=? AND interval=? AND open_time BETWEEN ? AND ? ORDER BY open_time',
+                      (symbol, interval, first, last)).fetchall()
+    if not atr or len(rows) != (last - first) // step + 1:
+        return None
+    target, stop = entry + direction * tp * atr, entry - direction * sl * atr
+    for (payload,) in rows:
+        bar = json.loads(payload)
+        high, low = float(bar['high']), float(bar['low'])
+        if (low <= stop) if direction > 0 else (high >= stop):
+            return stop
+        if (high >= target) if direction > 0 else (low <= target):
+            return target
+    return float(bar['close'])
+
+
+def outcome(db, symbol, as_of, horizon, verdict, now, atr=None):
+    """How one call came out once its hold is over: wait, missing, or hit/miss with the entry and exit prices and the signed return.
+    Horizons in BRACKETS exit at their ATR target or stop (`atr` is the 4h ATR at the call); the rest at the close when the hold ends."""
     interval, hold = HOLDS[horizon]
     if as_of + hold > now:
         return {'status': 'pending'}
     if verdict == 'wait':
         return {'status': 'wait', 'points': POINTS['wait']}
-    entry, exit_ = close_at(db, symbol, interval, as_of), close_at(db, symbol, interval, as_of + hold)
-    if entry is None or exit_ is None:
-        return {'status': 'missing'}  # The server was not collecting then; the call cannot be scored.
-    ret = (exit_ / entry - 1) * (1 if verdict == 'long' else -1)
+    direction = 1 if verdict == 'long' else -1
+    entry = close_at(db, symbol, interval, as_of)
+    if entry is None:
+        exit_ = None
+    elif horizon in BRACKETS:
+        exit_ = bracket_exit(db, symbol, interval, as_of, hold, entry, direction, atr, *BRACKETS[horizon])
+    else:
+        exit_ = close_at(db, symbol, interval, as_of + hold)
+    if exit_ is None:
+        return {'status': 'missing'}  # The server was not collecting then, or the report has no ATR; the call cannot be scored.
+    ret = (exit_ / entry - 1) * direction
     status = 'hit' if ret > 0 else 'miss'
     return {'status': status, 'entry': entry, 'exit': exit_, 'return': ret, 'points': POINTS[status]}
 
@@ -100,68 +131,11 @@ def scores(path=DB, now=None):
     groups = {}
     with closing(connect(path)) as db:
         ensure_candles(db)
-        query = 'SELECT r.symbol, r.as_of, r.mode, r.prompt_version, v.horizon, v.role, v.verdict FROM verdicts v JOIN reports r ON r.id = v.report_id'
-        for symbol, as_of, mode, version, horizon, role, verdict in db.execute(query).fetchall():
+        query = f'SELECT r.symbol, r.as_of, r.mode, r.prompt_version, v.horizon, v.role, v.verdict, {ATR_SQL} FROM verdicts v JOIN reports r ON r.id = v.report_id'
+        for symbol, as_of, mode, version, horizon, role, verdict, atr in db.execute(query).fetchall():
             key = {'mode': mode, 'promptVersion': version, 'horizon': horizon, 'role': role}
-            tally(groups, key, verdict, outcome(db, symbol, as_of, horizon, verdict, now))
+            tally(groups, key, verdict, outcome(db, symbol, as_of, horizon, verdict, now, atr))
     return sorted(summarize(groups), key=lambda g: (g['mode'], g['promptVersion'], g['horizon'], g['role'] != 'judge', g['role']))
-
-
-# Ways to turn the team's verified votes into one call. A wait is an abstention, not a vote, so a seat with no data
-# (the macro seat in a backtest) or a critic that only raised doubts does not block the analysts who did take a side.
-ANALYSTS = ('technical', 'derivatives', 'macro')
-OPPOSITE = {'long': 'short', 'short': 'long'}
-
-
-def unopposed(team, judge):
-    """The one direction analysts hold, if no team member (critic included) takes the other side."""
-    sides = {team.get(role) for role in ANALYSTS} - {'wait', None}
-    if len(sides) != 1:
-        return 'wait'
-    side = sides.pop()
-    return 'wait' if OPPOSITE[side] in team.values() else side
-
-
-def majority(team, judge):
-    """Whichever of long and short more team members hold, critic included; a tie is a wait."""
-    votes = list(team.values())
-    longs, shorts = votes.count('long'), votes.count('short')
-    return 'long' if longs > shorts else 'short' if shorts > longs else 'wait'
-
-
-RULES = {
-    'judge': ('LLM 종합 판정자', lambda team, judge: judge),
-    'technical': ('기술 분석가만 따름', lambda team, judge: team.get('technical', 'wait')),
-    'unopposed': ('반대 없는 방향', unopposed),
-    'majority': ('다수결 · 관망은 기권', majority),
-}
-
-
-def rule_scores(path=DB, now=None):
-    """Every rule in RULES applied to the stored team votes, scored like scores() per mode, prompt version and horizon."""
-    now = now or int(datetime.now().timestamp() * 1000)
-    calls = {}
-    with closing(connect(path)) as db:
-        ensure_candles(db)
-        query = ('SELECT r.id, r.symbol, r.as_of, r.mode, r.prompt_version, v.horizon, v.role, v.verdict '
-                 'FROM verdicts v JOIN reports r ON r.id = v.report_id')
-        for rid, symbol, as_of, mode, version, horizon, role, verdict in db.execute(query).fetchall():
-            call = calls.setdefault((rid, horizon), {'symbol': symbol, 'asOf': as_of, 'mode': mode, 'version': version, 'team': {}})
-            if role == 'judge':
-                call['judge'] = verdict
-            else:
-                call['team'][role] = verdict
-        groups = {}
-        for (_, horizon), call in calls.items():
-            seen = {}  # rules often agree; score each distinct verdict once
-            for rule, (_, decide) in RULES.items():
-                verdict = decide(call['team'], call.get('judge', 'wait'))
-                if verdict not in seen:
-                    seen[verdict] = outcome(db, call['symbol'], call['asOf'], horizon, verdict, now)
-                key = {'mode': call['mode'], 'promptVersion': call['version'], 'horizon': horizon, 'rule': rule}
-                tally(groups, key, verdict, seen[verdict])
-    order = list(RULES)
-    return sorted(summarize(groups), key=lambda g: (g['mode'], g['promptVersion'], g['horizon'], order.index(g['rule'])))
 
 
 def backtests(path=DB, now=None, limit=100):
@@ -171,14 +145,14 @@ def backtests(path=DB, now=None, limit=100):
     with closing(connect(path)) as db:
         ensure_candles(db)
         total = db.execute("SELECT count(*) FROM reports WHERE mode='backtest'").fetchone()[0]
-        rows = db.execute("""SELECT r.id, r.symbol, r.as_of, r.prompt_version, json_extract(r.payload, '$.priceScale'), v.horizon, v.verdict
+        rows = db.execute(f"""SELECT r.id, r.symbol, r.as_of, r.prompt_version, json_extract(r.payload, '$.priceScale'), v.horizon, v.verdict, {ATR_SQL}
                              FROM (SELECT * FROM reports WHERE mode='backtest' ORDER BY as_of DESC, id LIMIT ?) r
                              JOIN verdicts v ON v.report_id = r.id AND v.role = 'judge' ORDER BY r.as_of DESC, r.id""", (limit,)).fetchall()
         reports = {}
-        for rid, symbol, as_of, version, scale, horizon, verdict in rows:
+        for rid, symbol, as_of, version, scale, horizon, verdict, atr in rows:
             entry = reports.setdefault(rid, {'id': rid, 'symbol': symbol, 'asOf': as_of, 'promptVersion': version,
                                              'priceScale': scale, 'horizons': {}})
-            entry['horizons'][horizon] = {'verdict': verdict, **outcome(db, symbol, as_of, horizon, verdict, now)}
+            entry['horizons'][horizon] = {'verdict': verdict, **outcome(db, symbol, as_of, horizon, verdict, now, atr)}
     return {'total': total, 'reports': list(reports.values())}
 
 
@@ -192,6 +166,8 @@ def backtest_report(report_id, path=DB, now=None):
             return None
         symbol, as_of, payload = row
         report = json.loads(payload)
+        atr = report.get('facts', {}).get('4h.atr14')
+        atr = atr / (report.get('priceScale') or 1) if atr else None
         for horizon, data in report['horizons'].items():
-            data['outcome'] = outcome(db, symbol, as_of, horizon, data['verdict'], now)
+            data['outcome'] = outcome(db, symbol, as_of, horizon, data['verdict'], now, atr)
     return report

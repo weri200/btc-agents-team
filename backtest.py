@@ -1,15 +1,13 @@
-"""Replays past moments through the local team. Run: python backtest.py --symbol BTCUSDT --days 90
+"""Replays past moments through the code's rules (signals.py). Run: python backtest.py --symbol BTCUSDT --days 90
 Each snapshot is rebuilt only from Binance data published before that moment; calls are saved and scored as mode 'backtest'.
-The models see every price level times a per-moment factor and no date, so they cannot recall what happened next."""
+No model runs: the calls never depend on one, so a backtest scores exactly what the live analysis would have called."""
 import argparse
 from contextlib import closing
 from datetime import datetime, timezone
 from decimal import Decimal
 from functools import lru_cache
 import io
-import math
 from pathlib import Path
-import random
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -18,18 +16,17 @@ import zipfile
 import journal
 import local_llm
 import market
+import signals
 from market import BAR_COUNT, INTERVALS, MarketError, closed_bars
 
 STEP = INTERVALS['4h']  # moments sit on 4h boundaries, so every interval's last bar closes exactly there
 DAY = 86400000
 NEWEST = max(hold for _, hold in journal.HOLDS.values())  # the longest hold must be over to score the call
-MACRO_MISSING = '백테스트: 그 시점의 뉴스·거시 자료를 재현할 수 없어 관망으로 고정합니다.'
 # Binance's REST OI and long/short history only reaches about 30 days back; its bulk archive keeps 5-minute values for years.
 ARCHIVE = market.DB.parent / 'archive'
 ARCHIVE_URL = 'https://data.binance.vision/data/futures/um/daily/metrics/{symbol}/{symbol}-metrics-{day}.zip'
 METRIC_COLUMNS = ('create_time', 'symbol', 'sum_open_interest', 'sum_open_interest_value', 'count_toptrader_long_short_ratio',
                   'sum_toptrader_long_short_ratio', 'count_long_short_ratio', 'sum_taker_long_short_vol_ratio')
-PRICE_FIELDS = ('open', 'high', 'low', 'close', 'quoteVolume', 'takerBuyQuoteVolume')
 
 
 def bars_before(collector, at, interval, limit=BAR_COUNT + 1, path='/fapi/v1/klines', **params):
@@ -70,17 +67,22 @@ def metrics_day(symbol, day, folder=ARCHIVE):
             at = int(datetime.fromisoformat(parts[0]).replace(tzinfo=timezone.utc).timestamp() * 1000)
         except ValueError as exc:
             raise MarketError(f'{day} 아카이브 시각 형식 오류') from exc
-        for value in parts[2:]:
-            market.number(value, positive=True)
+        try:
+            for value in parts[2:]:
+                market.number(value, positive=True)
+        except MarketError:
+            continue  # the archive has occasional zero rows (e.g. OI value 0E-16 on 2026-10-15); that time counts as missing
         rows[at] = dict(zip(METRIC_COLUMNS, parts))
     return rows
 
 
 def metrics_at(symbol, at, folder=ARCHIVE):
-    row = metrics_day(symbol, market.iso(at)[:10], folder).get(at)
-    if row is None:
-        raise MarketError(f'아카이브에 {market.iso(at)} 값이 없습니다.')
-    return row
+    # The archive has short outages (OI 0 from 13:40 to 14:45 on 2026-10-15), so the last value up to 30 minutes earlier stands in.
+    for t in range(at, at - 7 * INTERVALS['5m'], -INTERVALS['5m']):
+        row = metrics_day(symbol, market.iso(t)[:10], folder).get(t)
+        if row is not None:
+            return row
+    raise MarketError(f'아카이브에 {market.iso(at)}부터 30분 전까지 값이 없습니다.')
 
 
 def ratio_row(at, ratio):
@@ -88,11 +90,14 @@ def ratio_row(at, ratio):
     return {'timestamp': at, 'longShortRatio': ratio, 'longAccount': f'{r / (1 + r):.4f}', 'shortAccount': f'{1 / (1 + r):.4f}'}
 
 
-def derivatives_at(collector, symbol, at, candles, folder=ARCHIVE):
-    """The same history the live analysis fetches, as it stood just before `at`.
+def funding_before(collector, symbol, at, limit=market.FUNDING_COUNT):
+    return market.history_rows(collector.request('/fapi/v1/fundingRate', symbol=symbol, limit=limit, endTime=at - 1),
+                               symbol, ('fundingRate',), 'fundingTime', signed=('fundingRate',))
+
+
+def derivatives_at(symbol, at, candles, funding, folder=ARCHIVE):
+    """The same history the live analysis fetches, as it stood just before `at`, given the funding settled before it.
     OI and long/short come from the archive (within about 0.3% of the REST values at 1h); taker ratios from klines, as REST computes them."""
-    funding = market.history_rows(collector.request('/fapi/v1/fundingRate', symbol=symbol, limit=market.FUNDING_COUNT, endTime=at - 1),
-                                  symbol, ('fundingRate',), 'fundingTime', signed=('fundingRate',))
     periods = {}
     for period, step in market.HISTORY_PERIODS.items():
         times = [at - k * step for k in range(market.HISTORY_COUNT, 0, -1)]
@@ -119,7 +124,7 @@ def derivatives_at(collector, symbol, at, candles, folder=ARCHIVE):
 
 def snapshot_at(collector, symbol, at, folder=ARCHIVE):
     candles = {i: bars_before(collector, at, i, symbol=symbol) for i in INTERVALS}
-    derivatives = derivatives_at(collector, symbol, at, candles, folder)
+    derivatives = derivatives_at(symbol, at, candles, funding_before(collector, symbol, at), folder)
     # shortcut: the live snapshot's funding rate is the running period's estimate; here it is the last settled rate.
     return {'symbol': symbol, 'serverTime': at, 'warnings': [], 'candles': candles,
             'ticker': {'price': candles['5m'][-1]['close']},
@@ -127,32 +132,13 @@ def snapshot_at(collector, symbol, at, folder=ARCHIVE):
                      'indexPrice': bars_before(collector, at, '5m', 1, '/fapi/v1/indexPriceKlines', pair=symbol)[-1]['close'],
                      'lastFundingRate': derivatives['funding'][-1]['fundingRate']},
             'openInterest': {'openInterest': metrics_at(symbol, at - INTERVALS['5m'], folder)['sum_open_interest']},
-            'derivatives': derivatives, 'macro': {'error': MACRO_MISSING}}
-
-
-def scale_of(at):
-    """Per-moment factor between 0.5 and 2, never within 10% of 1, the same on every rerun."""
-    rng = random.Random(at)
-    return round(math.exp(rng.choice((-1, 1)) * rng.uniform(0.1, math.log(2))), 4)
-
-
-def masked(snapshot, scale):
-    """The snapshot with every price level times `scale` and the date hidden; returns, ratios and RSI stay the same."""
-    def times(value):
-        return f'{float(value) * scale:.10g}'
-    derivatives = snapshot['derivatives']
-    return {**snapshot, 'hideDate': True,
-            'candles': {i: [{**b, **{f: times(b[f]) for f in PRICE_FIELDS}} for b in bars] for i, bars in snapshot['candles'].items()},
-            'ticker': {'price': times(snapshot['ticker']['price'])},
-            'mark': {**snapshot['mark'], 'markPrice': times(snapshot['mark']['markPrice']), 'indexPrice': times(snapshot['mark']['indexPrice'])},
-            'derivatives': {**derivatives, 'periods': {
-                p: {**m, 'openInterest': [{**r, 'sumOpenInterestValue': times(r['sumOpenInterestValue'])} for r in m['openInterest']]}
-                for p, m in derivatives['periods'].items()}}}
+            'derivatives': derivatives}
 
 
 def exit_bars(collector, symbol, at):
-    """The bar each horizon is scored on, so scores() finds it without the live collector."""
-    return {interval: bars_before(collector, at + hold, interval, 1, symbol=symbol) for interval, hold in journal.HOLDS.values()}
+    """Every bar of each horizon's hold, so scores() can follow a target and stop without the live collector."""
+    return {interval: bars_before(collector, at + hold, interval, hold // INTERVALS[interval], symbol=symbol)
+            for interval, hold in journal.HOLDS.values()}
 
 
 def moments(now, every, days):
@@ -164,28 +150,25 @@ def moments(now, every, days):
 def done(path, symbol):
     with closing(journal.connect(path)) as db:
         return {row[0] for row in db.execute("SELECT as_of FROM reports WHERE mode='backtest' AND symbol=? AND prompt_version=?",
-                                             (symbol, local_llm.PROMPT_VERSION))}
+                                             (symbol, signals.VERSION))}
 
 
-def run(symbol, days=90, every_hours=4, limit=None, collector=None, config=None, now=None, folder=ARCHIVE, log=print):
+def run(symbol, days=90, every_hours=4, limit=None, collector=None, now=None, folder=ARCHIVE, log=print):
     collector = collector or market.Collector()
-    config = config or local_llm.load_config()
     now = now or int(time.time() * 1000)
     seen = done(collector.db_path, symbol)
     todo = [at for at in moments(now, every_hours * 3600000, days) if at not in seen][:limit]
-    log(f'{symbol} · 프롬프트 {local_llm.PROMPT_VERSION} · 이미 분석 {len(seen)}건 · 이번에 {len(todo)}건')
+    log(f'{symbol} · 규칙 {signals.VERSION} · 이미 분석 {len(seen)}건 · 이번에 {len(todo)}건')
     saved = 0
     for n, at in enumerate(todo, 1):
         try:
             snapshot = snapshot_at(collector, symbol, at, folder)
             exits = exit_bars(collector, symbol, at)
-            scale = scale_of(at)
-            report = {**local_llm.analyze(masked(snapshot, scale), config), 'mode': 'backtest', 'priceScale': scale}
+            report = {**local_llm.analyze(snapshot), 'mode': 'backtest'}
             with closing(journal.connect(collector.db_path)) as db, db:
-                # Scoring reads the real prices; only the models saw scaled ones.
                 market.save_candles(db, symbol, {i: snapshot['candles'][i] + exits[i] for i in exits})
             journal.save_report(report, collector.db_path)
-        except (MarketError, local_llm.AnalysisError) as exc:
+        except MarketError as exc:
             log(f'[{n}/{len(todo)}] {market.iso(at)} 건너뜀: {exc}')
             continue
         saved += 1
@@ -197,13 +180,13 @@ def run(symbol, days=90, every_hours=4, limit=None, collector=None, config=None,
 def summary(path, log=print):
     for g in journal.scores(path):
         if g['mode'] == 'backtest' and g['role'] == 'judge':
-            hit = '—' if g['hitRate'] is None else f"{g['hitRate']:.0%}"
-            ret = '—' if g['meanReturnPct'] is None else f"{g['meanReturnPct']:+.2f}%"
+            hit = '-' if g['hitRate'] is None else f"{g['hitRate']:.0%}"
+            ret = '-' if g['meanReturnPct'] is None else f"{g['meanReturnPct']:+.2f}%"
             log(f"{g['promptVersion']} {g['horizon']}: 판정 {g['calls']} · 채점 {g['scored']} · 적중률 {hit} · 평균 {ret} · 관망 {g['waitRate']:.0%}")
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='저장된 판정 채점과 같은 기준으로 과거 시점을 로컬 모델팀에 다시 분석시킵니다.')
+    parser = argparse.ArgumentParser(description='저장된 판정 채점과 같은 기준으로 과거 시점에 코드 규칙을 다시 적용합니다. 모델은 실행하지 않습니다.')
     parser.add_argument('--symbol', default='BTCUSDT', choices=market.SYMBOLS)
     parser.add_argument('--days', type=int, default=90, help='오늘부터 거슬러 올라갈 일수')
     parser.add_argument('--every-hours', type=int, default=4, help='분석 시점 간격(4의 배수)')
@@ -213,12 +196,5 @@ if __name__ == '__main__':
         parser.error('--every-hours는 4의 배수여야 합니다.')
     if args.days <= 3:
         parser.error('--days는 4 이상이어야 합니다. 최근 3일은 아직 채점할 수 없습니다.')
-    try:
-        state = local_llm.status()
-    except local_llm.AnalysisError as exc:
-        raise SystemExit(str(exc))
-    if not state['ready']:
-        missing = ', '.join(f"{r['name']}({r['model']})" for r in state['roles'] if not r['available'])
-        raise SystemExit(f'LM Studio에서 찾을 수 없는 모델: {missing}')
     run(args.symbol, args.days, args.every_hours, args.limit)
     summary(market.DB)

@@ -217,11 +217,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.get('/api/market?symbol=BTCUSDT', {'Origin': 'https://other.example'})[0], 403)
         self.assertEqual(self.get('/', {'Host': 'other.example'})[0], 403)
 
-    def test_scores_include_rule_comparison(self):
-        with patch.object(server.journal, 'scores', return_value=[]), patch.object(server.journal, 'rule_scores', return_value=[{'rule': 'unopposed'}]):
+    def test_scores_endpoint(self):
+        with patch.object(server.journal, 'scores', return_value=[{'role': 'judge'}]):
             data = json.loads(self.get('/api/scores')[1])
-        self.assertEqual(data['rules'], [{'rule': 'unopposed'}])
-        self.assertEqual(set(data['ruleLabels']), set(server.journal.RULES))
+        self.assertEqual((data['groups'], data['brackets']['swing']), ([{'role': 'judge'}], {'target': 2.0, 'stop': 1.0}))
 
     def test_backtest_endpoints(self):
         with patch.object(server.journal, 'backtests', return_value={'total': 0, 'reports': []}):
@@ -246,6 +245,11 @@ class ServerTests(unittest.TestCase):
         connection.close()
         return result
 
+    def assert_released(self):
+        # The handler answers before its finally block releases the lock, so give it a moment.
+        self.assertTrue(server.local_llm.lock.acquire(timeout=1))
+        server.local_llm.lock.release()
+
     def test_local_analysis_guards(self):
         self.assertEqual(self.post(headers={'Origin': 'https://other.example'})[0], 403)
         self.assertEqual(self.post(headers={'Content-Type': 'text/plain'})[0], 400)
@@ -255,7 +259,7 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(self.post()[0], 409)
 
     def test_local_analysis_success_and_failure(self):
-        with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}), \
+        with patch.object(server.local_llm, 'load_config', return_value={'model': 'm', 'temperature': 0.1}), \
                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}), \
                 patch.object(server.collector, 'derivatives', return_value={}), \
                 patch.object(server.macro, 'collect', return_value={}), \
@@ -265,18 +269,20 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(json.loads(body)['id'], 'test')
             save.assert_called_once_with({'id': 'test'}, server.collector.db_path)
         # A journal that cannot save still returns the finished report.
-        with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}),                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}),                 patch.object(server.collector, 'derivatives', return_value={}),                 patch.object(server.macro, 'collect', return_value={}),                 patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}),                 patch.object(server.journal, 'save_report', side_effect=sqlite3.OperationalError('locked')):
+        with patch.object(server.local_llm, 'load_config', return_value={'model': 'm', 'temperature': 0.1}),                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}),                 patch.object(server.collector, 'derivatives', return_value={}),                 patch.object(server.macro, 'collect', return_value={}),                 patch.object(server.local_llm, 'analyze', return_value={'id': 'test'}),                 patch.object(server.journal, 'save_report', side_effect=sqlite3.OperationalError('locked')):
             self.assertEqual(self.post()[0], 200)
-        with patch.object(server.local_llm, 'status', side_effect=server.local_llm.AnalysisError('offline')):
+        with patch.object(server.collector, 'collect', side_effect=market.MarketError('offline')):
             self.assertEqual(self.post()[0], 502)
-        self.assertFalse(server.local_llm.lock.locked())
+        with patch.object(server.local_llm, 'load_config', side_effect=server.local_llm.AnalysisError('bad models.json')):
+            self.assertEqual(self.post()[0], 502)
+        self.assert_released()
 
     def test_progress_and_last_report_endpoints(self):
         progress = server.local_llm.Progress(Path(tempfile.mkdtemp()) / 'timings.json')
         with patch.object(server.local_llm, 'progress', progress):
             self.assertEqual(json.loads(self.get('/api/progress')[1]), {'state': 'idle'})
             self.assertEqual(self.get('/api/last-report')[0], 404)
-            with patch.object(server.local_llm, 'status', return_value={'ready': True, 'roles': []}), \
+            with patch.object(server.local_llm, 'load_config', return_value={'model': 'm', 'temperature': 0.1}), \
                     patch.object(server.collector, 'collect', return_value={'serverTime': NOW}), \
                     patch.object(server.collector, 'derivatives', return_value={}), \
                     patch.object(server.macro, 'collect', return_value={}), \
@@ -285,10 +291,10 @@ class ServerTests(unittest.TestCase):
             state = json.loads(self.get('/api/progress')[1])
             self.assertEqual((state['state'], state['reportId']), ('done', 'done-report'))
             self.assertEqual(json.loads(self.get('/api/last-report')[1])['id'], 'done-report')
-            with patch.object(server.local_llm, 'status', side_effect=RuntimeError('boom')):
+            with patch.object(server.collector, 'collect', side_effect=RuntimeError('boom')):
                 self.assertEqual(self.post()[0], 500)
             self.assertEqual(json.loads(self.get('/api/progress')[1])['state'], 'failed')
-            self.assertFalse(server.local_llm.lock.locked())
+            self.assert_released()
 
 
 if __name__ == '__main__':

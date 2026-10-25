@@ -1,26 +1,23 @@
-"""Local LM Studio team: one model per role, cited values verified against server-computed indicators."""
+"""One LM Studio model explains the calls signals.py made: why the rule fired or not, and the risks it does not look at.
+The model never decides; without it the report still carries every call, written out by the code."""
 import json
-import math
 import re
 import threading
 import time
 import uuid
-from decimal import Decimal
 from pathlib import Path
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 from urllib.error import HTTPError, URLError
 
 import indicators
+import signals
 from market import iso
 
 BASE = 'http://127.0.0.1:1234/v1'
 CONFIG = Path(__file__).resolve().parent / 'models.json'
-ROLES = {'technical': '기술 분석가', 'derivatives': '파생상품 분석가', 'macro': '뉴스·거시 분석가',
-         'critic': '반대 검토자', 'judge': '종합 판정자'}
-OPTIONAL_ROLES = {'macro'}  # Without it (or without OpenBB data) the macro seat stays a fixed wait.
+ROLES = {'explainer': '해설 모델'}
 HORIZONS = {'intraday': ('단타', '5분 · 15분 · 1시간', ('5m', '15m', '1h')),
             'swing': ('스윙', '4시간 · 1일', ('4h', '1d'))}
-PROMPT_VERSION = 'local-team-v5'
 RETRY_DELAY = 5
 TIMINGS = Path(__file__).resolve().parent / 'data' / 'llm_timings.json'
 DEFAULT_EXPECTED_MS = 60000
@@ -150,15 +147,13 @@ def load_config(path=None):
         config = json.loads(Path(path or CONFIG).read_text(encoding='utf-8'))
     except (OSError, ValueError) as exc:
         raise AnalysisError('models.json을 읽을 수 없습니다. 파일과 JSON 형식을 확인하세요.') from exc
-    roles = config.get('roles') if isinstance(config, dict) else None
-    if (not isinstance(roles, dict) or not set(ROLES) - OPTIONAL_ROLES <= set(roles) <= set(ROLES)
-            or any(not isinstance(m, str) or not m.strip() or len(m) > 200 for m in roles.values())):
-        raise AnalysisError('models.json의 roles에 technical, derivatives, critic, judge 모델 ID가 필요합니다. macro는 선택입니다.')
+    model = config.get('model') if isinstance(config, dict) else None
+    if not isinstance(model, str) or not model.strip() or len(model) > 200:
+        raise AnalysisError('models.json의 model에 해설 모델의 LM Studio ID 하나를 적으세요.')
     temperature = config.get('temperature', 0.1)
     if type(temperature) not in (int, float) or not 0 <= temperature <= 1:
         raise AnalysisError('models.json의 temperature는 0~1 사이 숫자여야 합니다.')
-    # Keep the run order regardless of how the file lists roles.
-    return {'roles': {k: roles[k].strip() for k in ROLES if k in roles}, 'temperature': float(temperature)}
+    return {'model': model.strip(), 'temperature': float(temperature)}
 
 
 def status():
@@ -166,12 +161,9 @@ def status():
     result = request('/models')
     if not isinstance(result, dict) or not isinstance(result.get('data'), list) or any(not isinstance(m, dict) for m in result['data']):
         raise AnalysisError('LM Studio 모델 목록 형식이 올바르지 않습니다.')
-    ids = {m.get('id') for m in result['data']}
-    roles = [{'role': role, 'name': ROLES[role], 'model': model, 'available': model in ids}
-             for role, model in config['roles'].items()]
-    models = list(config['roles'].values())
-    warnings = ['같은 모델을 여러 역할에 쓰고 있어 의견의 독립성이 낮습니다.'] if len(set(models)) < len(models) else []
-    return {'endpoint': BASE, 'ready': all(r['available'] for r in roles), 'roles': roles, 'warnings': warnings}
+    available = config['model'] in {m.get('id') for m in result['data']}
+    return {'endpoint': BASE, 'ready': available, 'warnings': [],
+            'roles': [{'role': 'explainer', 'name': ROLES['explainer'], 'model': config['model'], 'available': available}]}
 
 
 def obj(properties):
@@ -179,37 +171,7 @@ def obj(properties):
 
 
 TEXT = {'type': 'string', 'minLength': 6, 'maxLength': 300}
-VERDICT = {'type': 'string', 'enum': ['long', 'short', 'wait']}
-SYNTHESIS = obj({'verdict': VERDICT, **{k: TEXT for k in ('summary', 'agreement', 'disagreement', 'condition')}})
-JUDGE_SCHEMA = obj({h: SYNTHESIS for h in HORIZONS})
-
-# Which facts each analyst sees, by indicator name. Narrow inputs keep each model in its lane.
-DERIVATIVE_FACTS = {'oiChange1Pct', 'oiChange24Pct', 'oiValueUsd', 'longShortRatio', 'longShortRatioChange24',
-                    'topLongShortRatio', 'topLongShortRatioChange24', 'takerBuySellRatio', 'takerBuySellAvg24',
-                    'fundingRatePct', 'fundingAvgPct', 'fundingMinPct', 'fundingMaxPct', 'fundingPositiveShare',
-                    'premiumPct', 'openInterest', 'markPrice', 'indexPrice'}
-PRICE_CONTEXT = {'change1Pct', 'change20Pct', 'volumeRatio20', 'lastPrice'}
-ROLE_FACTS = {
-    'technical': lambda key, name: not key.startswith('macro.') and name not in DERIVATIVE_FACTS,
-    'derivatives': lambda key, name: not key.startswith('macro.') and (name in DERIVATIVE_FACTS or name in PRICE_CONTEXT),
-    'macro': lambda key, name: key.startswith('macro.'),
-    'critic': lambda key, name: True,
-}
-
-
-def analyst_schema(keys, news_ids=None):
-    # The ref enum lets constrained decoding reject made-up indicator names outright; news ids work the same way.
-    def agent(horizon):
-        # ref and value come before claim so the model picks a fact first and then describes it.
-        evidence = obj({'ref': {'type': 'string', 'enum': keys[horizon]}, 'value': {'type': 'number'}, 'claim': TEXT})
-        fields = {'verdict': VERDICT, 'summary': TEXT,
-                  'evidence': {'type': 'array', 'minItems': 1, 'maxItems': 4, 'items': evidence},
-                  'counter': TEXT, 'invalidation': TEXT}
-        if news_ids is not None:
-            fields['news'] = {'type': 'array', 'minItems': 0, 'maxItems': 3 if news_ids else 0,
-                              'items': {'type': 'string', 'enum': news_ids or ['none']}}
-        return obj(fields)
-    return obj({h: agent(h) for h in HORIZONS})
+SCHEMA = obj({h: obj({'summary': TEXT, 'risk': TEXT}) for h in HORIZONS})
 
 
 def validate(value, schema):
@@ -219,33 +181,10 @@ def validate(value, schema):
             raise AnalysisError('모델 보고서의 필드가 올바르지 않습니다.')
         for key, child in schema['properties'].items():
             validate(value[key], child)
-    elif kind == 'array':
-        if not isinstance(value, list) or not schema['minItems'] <= len(value) <= schema['maxItems']:
-            raise AnalysisError('모델 근거 개수가 올바르지 않습니다.')
-        for item in value:
-            validate(item, schema['items'])
-    elif kind == 'number':
-        if type(value) not in (int, float) or not math.isfinite(value):
-            raise AnalysisError('모델 근거 값이 숫자가 아닙니다.')
     elif (not isinstance(value, str) or len(value.strip()) < schema.get('minLength', 1)
           or len(value) > schema.get('maxLength', 300)):
         raise AnalysisError('모델 보고서의 문장 형식이 올바르지 않습니다.')
-    elif 'enum' in schema and value not in schema['enum']:
-        raise AnalysisError('모델 판정 또는 참조 값이 올바르지 않습니다.')
     return value
-
-
-def significant_digits(value):
-    number = Decimal(repr(value)).normalize()
-    return 0 if number == 0 else len(number.as_tuple().digits)
-
-
-def matches(cited, actual):
-    """Within 0.5%, or the actual value rounded to the cited precision (at least 2 significant digits)."""
-    if abs(cited - actual) <= abs(actual) * 0.005:
-        return True
-    digits = significant_digits(cited)
-    return digits >= 2 and float(f'{actual:.{digits}g}') == float(f'{cited:.{digits}g}')
 
 
 # Interval and indicator names contain digits but are not claims about values.
@@ -253,57 +192,21 @@ NAMES = re.compile(r'(?i)\b(?:5m|15m|1h|4h|1d)\b|\b(?:rsi|sma|atr|ema|ma)\s?\d+|
                    r'|s&p\s?500|나스닥\s?100|2s10s')
 
 
-def verify(agent, facts):
-    checks = []
-    for item in agent['evidence']:
-        actual = facts.get(item['ref'])
-        checks.append({'ref': item['ref'], 'cited': item['value'], 'actual': actual,
-                       'ok': actual is not None and matches(item['value'], actual)})
-    text = ' '.join([agent['summary'], agent['counter'], agent['invalidation'], *(e['claim'] for e in agent['evidence'])])
-    failed = [c for c in checks if not c['ok']]
-    return {'checked': len(checks), 'matched': len(checks) - len(failed), 'failed': failed, 'checks': checks,
-            'numbersInText': bool(re.search(r'\d', NAMES.sub('', text)))}
+def numbers_in(text):
+    return bool(re.search(r'\d', NAMES.sub('', text)))
 
 
-COMMON = ('모든 문장은 반드시 한국어로 씁니다. 영어 문장을 쓰지 마세요. Binance USDⓈ-M 무기한 선물의 공개 시장 데이터를 분석합니다. 단타(intraday)는 5m/15m/1h, 스윙(swing)은 4h/1d 지표를 씁니다. '
-          '모든 지표는 서버가 마감 봉으로 계산한 facts에 있습니다. 직접 계산하지 말고 facts의 값만 근거로 쓰세요. '
-          'signals는 서버가 facts의 방향(위/아래, 증가/감소, 우위)을 문장으로 옮긴 것입니다. 방향과 해석은 signals와 반드시 일치시키세요. '
-          '근거마다 ref에 facts의 키를, value에 그 키의 값을 그대로 적으세요. 서버가 value를 실제 값과 대조하며, 틀리면 의견이 관망으로 바뀝니다. '
-          'claim, summary, counter, invalidation 문장에는 숫자를 쓰지 마세요. 숫자는 value에만 적습니다. '
-          '항목: summary는 판단 한 문장, claim은 그 지표가 뜻하는 해석, counter는 이 판단이 틀릴 수 있는 이유, invalidation은 판단을 철회할 관찰 조건입니다. '
-          '근거마다 다른 지표를 쓰고 같은 문장을 반복하지 마세요. 판정 단어(long, short, wait)만 적지 마세요. '
-          '근거가 부족하거나 지표가 엇갈리면 wait. 확률, 목표가, 수익 보장, 주문 지시를 하지 마세요. 문장은 80자 이내로 씁니다.')
-ROLE_PROMPTS = {
-    'technical': ('역할: 기술 분석가. 이동평균 대비 위치, RSI, ATR, 변화율, 20봉 고저, 거래량 비율로 추세와 모멘텀을 판단합니다. '
-                  # Time-series momentum and trend following (Moskowitz-Ooi-Pedersen 2012, Turtle rules).
-                  '스윙은 시계열 모멘텀·추세추종으로 판단합니다. 1d 20기간 변화율의 방향과 1d 종가의 SMA200·SMA50 대비 위치가 같은 쪽이면 그 방향, '
-                  '엇갈리면 wait입니다. 4h는 진입 시점 확인용이며 1d 방향을 뒤집지 않습니다. RSI 과매수·과매도만으로 추세에 반대하지 마세요. '
-                  '스윙 invalidation은 롱이면 20봉 저점 이탈, 숏이면 20봉 고점 돌파로 씁니다. ATR 비율이 높으면 counter에 변동성 위험을 적습니다. '
-                  # Intraday: higher-timeframe alignment plus volume-confirmed range breakout.
-                  '단타는 1h 20기간 변화율의 방향과 1h 종가의 SMA50 대비 위치가 같은 쪽일 때 그 방향만 봅니다. 엇갈리거나 5m·15m 신호가 1h와 반대면 wait입니다. '
-                  '그 방향으로 15m 종가가 직전 20봉 고점 위로 돌파(롱) 또는 저점 아래로 이탈(숏)하고 15m 거래량이 평소보다 많을 때만 long 또는 short이고, 돌파가 없거나 거래량이 평소 수준 이하면 wait입니다. '
-                  '단타 invalidation은 15m 종가가 다시 20봉 범위 안으로 돌아오는 것으로 씁니다.'),
-    'derivatives': ('역할: 파생상품 분석가. 포지션과 수급으로 판단합니다. 사용할 facts: 펀딩비율과 최근 정산 평균·최소·최대·양수 비율(market.funding*), '
-                    '마크-인덱스 프리미엄, 미결제약정 변화율(oiChange1Pct, oiChange24Pct), 전체 계정 롱숏 비율(longShortRatio)과 대형 트레이더 포지션 롱숏 비율(topLongShortRatio) 및 24기간 변화, '
-                    '테이커 매수/매도 비율(takerBuySellRatio)과 24기간 평균. 단타는 1h, 스윙은 4h 기간 값을 씁니다. '
-                    '가격 변화(change20Pct)와 미결제약정 변화를 함께 보고 해석하되, 신규 유입이나 청산은 가능성으로만 표현하세요.'),
-    'critic': ('역할: 반대 검토자. team에 있는 다른 분석가 의견의 약점, 서로 맞지 않는 지표, 놓친 위험을 찾습니다. '
-               '같은 facts로 반론 근거를 제시하고, 동의하더라도 남은 위험을 적으세요.'),
-    'macro': ('역할: 뉴스·거시 분석가. 미국 2년·10년 국채 금리와 5일 변화(bp), 장단기 금리차, VIX와 변화율, S&P500·나스닥100 변화율로 '
-              '위험 선호를 판단합니다. 참고 자료: calendar는 발표됐거나 예정된 미국 주요 경제 지표, news는 코인 관련 기사 제목과 요약입니다. '
-              '기사를 근거로 쓰면 그 기사 id를 news에 적으세요. 기사에 없는 사실, 수치, 발표 결과를 만들지 마세요. '
-              '기사와 지수는 날짜 단위이고 미국 장 마감 기준이라 최신 상황과 차이가 있을 수 있습니다. '
-              '단타는 1일 변화와 가까운 일정, 스윙은 5일 변화와 금리 흐름을 중시합니다. 예정된 지표의 결과는 추측하지 마세요.'),
-    'judge': ('역할: 종합 판정자. team의 의견을 정리해 종합 판정, 공통 의견, 남은 이견, 재검토 조건을 씁니다. '
-              'verificationFailed가 true인 의견은 신뢰하지 마세요. 새 근거나 숫자를 만들지 마세요. 숫자는 쓰지 않습니다. '
-              '의견이 갈리거나 근거가 약하면 wait. 확률, 목표가, 주문 지시를 하지 마세요.'),
-}
-ROLE_LABELS = {'technical': '추세 · 모멘텀 · 지표', 'derivatives': '펀딩 · 프리미엄 · 미결제약정',
-               'macro': '금리 · 위험 선호 · 뉴스', 'critic': '반론 · 실패 조건'}
+PROMPT = ('모든 문장은 반드시 한국어로 씁니다. 영어 문장을 쓰지 마세요. Binance USDⓈ-M 무기한 선물의 공개 시장 데이터입니다. '
+          '주기(intraday 단타, swing 스윙)마다 verdict는 서버 코드가 rule과 checks로 이미 정한 판정입니다. 판정을 바꾸거나 다른 판정을 권하지 마세요. '
+          'summary에는 checks를 바탕으로 이 판정이 나온 이유를 한 문장으로 씁니다. '
+          'risk에는 규칙이 보지 않는 위험을 한두 문장으로 씁니다. facts와 signals의 펀딩비율, 미결제약정, 롱숏 비율, 테이커 비율, ATR 비율(변동성)과 '
+          'macro의 금리·VIX·지수 변화, 경제 일정(calendar), 뉴스(news)에서 찾습니다. macro가 없으면 뉴스·거시 자료가 없다고 적습니다. '
+          '자료에 없는 사실, 수치, 발표 결과를 만들지 마세요. 숫자는 쓰지 마세요. 조건 수치는 서버가 따로 보여줍니다. '
+          '확률, 목표가, 수익 보장, 주문 지시를 하지 마세요. 문장은 120자 이내로 씁니다.')
 
 
 def request_retry(path, payload):
-    # LM Studio can briefly reject a request while JIT swaps models; one retry covers that.
+    # LM Studio can briefly reject a request while JIT loads the model; one retry covers that.
     try:
         return request(path, payload)
     except AnalysisError:
@@ -329,36 +232,30 @@ def tidy(value):
     return value
 
 
-def chat(role, model, payload, schema, temperature):
-    system = (ROLE_PROMPTS[role] if role == 'judge' else COMMON + ' ' + ROLE_PROMPTS[role])
-    if 'qwen' in model.lower():
-        system += ' /no_think'
-    label = f'{ROLES[role]}({model})'
+def chat(model, payload, temperature):
+    system = PROMPT + (' /no_think' if 'qwen' in model.lower() else '')
+    label = f"{ROLES['explainer']}({model})"
     try:
         result = request_retry('/chat/completions', {
             # Reasoning models (e.g. Gemma 4) otherwise spend the whole token budget thinking before the JSON.
             'model': model, 'temperature': temperature, 'max_tokens': 4000, 'stream': False, 'reasoning_effort': 'none',
             'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],
-            'response_format': {'type': 'json_schema', 'json_schema': {'name': role, 'strict': True, 'schema': schema}},
+            'response_format': {'type': 'json_schema', 'json_schema': {'name': 'explainer', 'strict': True, 'schema': SCHEMA}},
         })
     except AnalysisError as exc:
         raise AnalysisError(f'{label} 호출 실패: {exc}') from exc
     try:
         choice = result['choices'][0]
         if choice.get('finish_reason') != 'stop':
-            raise AnalysisError(f'{label} 응답이 끝나지 않아 보고서를 사용하지 않았습니다.')
-        return tidy(validate(json.loads(choice['message']['content']), schema))
+            raise AnalysisError(f'{label} 응답이 끝나지 않아 해설을 사용하지 않았습니다.')
+        return tidy(validate(json.loads(choice['message']['content']), SCHEMA))
     except AnalysisError as exc:
         raise AnalysisError(str(exc) if label in str(exc) else f'{label}: {exc}') from exc
     except (KeyError, IndexError, TypeError, ValueError) as exc:
-        raise AnalysisError(f'{label}: 유효한 JSON 보고서를 반환하지 않았습니다.') from exc
+        raise AnalysisError(f'{label}: 유효한 JSON 해설을 반환하지 않았습니다.') from exc
 
 
-def evidence_text(item, check):
-    if check['ok']:
-        return f"{item['claim']} ({item['ref']} = {item['value']} · 일치)"
-    actual = '없음' if check['actual'] is None else check['actual']
-    return f"{item['claim']} ({item['ref']} 인용 {item['value']} · 실제 {actual} · 불일치)"
+LABELS = {'long': '롱', 'short': '숏', 'wait': '관망'}
 
 
 def macro_sources_title(macro):
@@ -367,103 +264,60 @@ def macro_sources_title(macro):
 
 
 def analyze(snapshot, config=None):
-    config = config or load_config()
-    roles = config['roles']
+    """The report for one snapshot: the code's call per horizon, explained by config's model when a config is given."""
     # Recompute so derivatives history fetched for this analysis is included.
     facts = indicators.flatten(indicators.compute(snapshot))
     macro = snapshot.get('macro') if isinstance(snapshot.get('macro'), dict) else {}
-    macro_ready = 'macro' in roles and bool(macro.get('facts'))
-    if macro_ready:
-        facts.update(macro['facts'])
-    # market.* and macro.* apply to both horizons; interval keys only to their own horizon.
-    keys = {role: {h: sorted(k for k in facts if (k.startswith(('market.', 'macro.')) or k.split('.')[0] in frames)
-                             and allowed(k, k.split('.', 1)[1]))
-                   for h, (_, _, frames) in HORIZONS.items()}
-            for role, allowed in ROLE_FACTS.items()}
     stamp = iso(snapshot['serverTime'])
-    shown = '비공개' if snapshot.get('hideDate') else stamp  # backtests hide the date so models cannot recall that day
     warnings = (list(snapshot['warnings']) + list((snapshot.get('derivatives') or {}).get('warnings', []))
                 + list(macro.get('warnings', [])))
-    if 'macro' in roles and not macro_ready:
-        warnings.append('뉴스·거시 분석가: ' + (macro.get('error') or 'OpenBB 자료가 없어 실행하지 않았습니다.'))
-    data = {'symbol': snapshot['symbol'], 'asOf': shown, 'warnings': list(warnings)}
-    news = {n['id']: n for n in macro.get('news', [])} if macro_ready else {}
+    if macro.get('error'):
+        warnings.append('뉴스·거시 자료: ' + macro['error'])
+    calls = {h: {'verdict': signals.decide(facts, h), 'rule': signals.NAMES[h], 'checks': signals.checks(facts, h)} for h in HORIZONS}
+    for h, call in calls.items():
+        call['exit'] = signals.exit_plan(facts, h, call['verdict'])
 
-    outputs, checks = {}, {}
+    explained = {}
+    if config:
+        keys = {h: sorted(k for k in facts if k.startswith('market.') or k.split('.')[0] in frames)
+                for h, (_, _, frames) in HORIZONS.items()}
+        payload = {'symbol': snapshot['symbol'], 'asOf': stamp, 'warnings': list(warnings),
+                   'horizons': {h: {**calls[h], 'facts': {k: facts[k] for k in keys[h]}, 'signals': indicators.describe(facts, keys[h])}
+                                for h in HORIZONS}}
+        if macro.get('facts'):
+            payload['macro'] = {'facts': macro['facts'], 'signals': indicators.describe(macro['facts'], sorted(macro['facts'])),
+                                'calendar': macro.get('calendar', []),
+                                'news': [{k: n[k] for k in ('date', 'publisher', 'title', 'excerpt')} for n in macro.get('news', [])]}
+        progress.role('explainer', 'running')
+        try:
+            explained = chat(config['model'], payload, config['temperature'])
+            progress.role('explainer', 'done')
+        except AnalysisError as exc:
+            # The calls never depended on the model, so a failed explanation only leaves the code's own text.
+            progress.role('explainer', 'failed', str(exc))
+            warnings.append(f'{exc} 판정은 코드가 낸 그대로입니다.')
 
-    def run(role, extra=None, news_ids=None):
-        payload = {**data, 'facts': {h: {k: facts[k] for k in keys[role][h]} for h in HORIZONS},
-                   'signals': {h: indicators.describe(facts, keys[role][h]) for h in HORIZONS}, **(extra or {})}
-        progress.role(role, 'running')
-        outputs[role] = chat(role, roles[role], payload, analyst_schema(keys[role], news_ids), config['temperature'])
-        checks[role] = {h: verify(outputs[role][h], facts) for h in HORIZONS}
-        mismatched = [HORIZONS[h][0] for h in HORIZONS if checks[role][h]['failed']]
-        progress.role(role, 'done', f"{'·'.join(mismatched)} 인용 수치가 서버 계산값과 달라 관망으로 바꿨습니다." if mismatched else None)
-
-    def effective(role, h):
-        return 'wait' if checks[role][h]['failed'] else outputs[role][h]['verdict']
-
-    def team_view(role_list):
-        return {h: [{'role': ROLES[r], 'verdict': effective(r, h), 'summary': outputs[r][h]['summary'],
-                     'counter': outputs[r][h]['counter'], 'verificationFailed': bool(checks[r][h]['failed'])}
-                    for r in role_list] for h in HORIZONS}
-
-    analysts = ['technical', 'derivatives']
-    run('technical')
-    run('derivatives')
-    if macro_ready:
-        run('macro', {'calendar': macro['calendar'],
-                      'news': [{k: n[k] for k in ('id', 'date', 'publisher', 'title', 'excerpt')} for n in news.values()]},
-            news_ids=list(news))
-        analysts.append('macro')
-    elif 'macro' in roles:
-        progress.role('macro', 'skipped', macro.get('error') or 'OpenBB 자료가 없습니다.')
-    run('critic', {'team': team_view(analysts)})
-    judge_input = {'symbol': snapshot['symbol'], 'asOf': shown, 'warnings': list(warnings),
-                   'team': team_view([*analysts, 'critic'])}
-    if not macro_ready:
-        judge_input['missing'] = '뉴스·거시 자료가 없어 해당 분석가는 관망입니다.'
-    progress.role('judge', 'running')
-    judged = chat('judge', roles['judge'], judge_input, JUDGE_SCHEMA, config['temperature'])
-    progress.role('judge', 'done')
-
-    sources = [{'title': 'Binance 공개 API 스냅샷 · 서버 계산 지표', 'url': None, 'asOf': stamp}]
+    sources = [{'title': 'Binance 공개 API 스냅샷 · 서버 계산 지표 · 코드 규칙 판정', 'url': None, 'asOf': stamp}]
+    if explained and macro.get('facts'):
+        sources.append({'title': macro_sources_title(macro), 'url': None, 'asOf': stamp})
+        sources += [{'title': f"{n['publisher']} · {n['title']}"[:200], 'url': n['url'], 'asOf': n['date'] + 'T00:00:00+00:00'}
+                    for n in macro.get('news', [])[:10]]
     horizons = {}
     for h, (label, frames, _) in HORIZONS.items():
-        agents = []
-        for role in (*analysts, 'critic'):
-            out, check = outputs[role][h], checks[role][h]
-            agent = {'id': role, 'name': ROLES[role], 'role': ROLE_LABELS[role], 'verdict': effective(role, h),
-                     'summary': out['summary'], 'counter': out['counter'], 'invalidation': out['invalidation'],
-                     'evidence': [evidence_text(i, c) for i, c in zip(out['evidence'], check['checks'])],
-                     'model': roles[role], 'sources': sources, 'verification': {**check, 'originalVerdict': out['verdict']}}
-            if role == 'macro':
-                cited = [news[i] for i in dict.fromkeys(out['news'])]
-                agent['sources'] = [{'title': macro_sources_title(macro), 'url': None, 'asOf': stamp},
-                                    *({'title': f"{n['publisher']} · {n['title']}"[:200], 'url': n['url'],
-                                       'asOf': n['date'] + 'T00:00:00+00:00'} for n in cited)]
-                agent['news'] = [n['id'] for n in cited]
-            agents.append(agent)
-            if check['failed']:
-                warnings.append(f"{ROLES[role]}({label}): 인용 수치 {len(check['failed'])}개 불일치로 관망 처리했습니다.")
-            if check['numbersInText']:
-                warnings.append(f'{ROLES[role]}({label}): 문장에 검증하지 않은 숫자가 있습니다.')
-        if not macro_ready:
-            reason = macro.get('error') or ('models.json에 macro 모델이 없습니다.' if 'macro' not in roles else 'OpenBB 자료가 없습니다.')
-            agents.insert(2, {'id': 'macro', 'name': '뉴스·거시 분석가', 'role': '자료 미연결', 'verdict': 'wait',
-                              'summary': '뉴스·거시 자료가 없어 판정을 보류합니다.', 'evidence': [reason],
-                              'counter': '외부 이벤트가 기술적 해석을 바꿀 수 있습니다.', 'invalidation': '시각과 출처가 검증된 자료를 연결한 뒤 재분석합니다.',
-                              'model': '미실행 · 자료 부족', 'sources': [{'title': '뉴스·거시 자료 미제공', 'url': None, 'asOf': stamp}]})
-        synthesis = judged[h]
-        verdict = synthesis['verdict']
-        # The judge may only side with a verdict some verified team member actually holds.
-        if verdict != 'wait' and verdict not in {a['verdict'] for a in agents}:
-            warnings.append(f'종합 판정자({label}): 팀원 누구도 지지하지 않은 판정이라 관망으로 바꿨습니다.')
-            verdict = 'wait'
-        horizons[h] = {**{k: synthesis[k] for k in ('summary', 'agreement', 'disagreement', 'condition')},
-                       'verdict': verdict, 'label': label, 'timeframes': frames, 'agents': agents,
-                       'judge': {'model': roles['judge'], 'originalVerdict': synthesis['verdict']}}
+        call, text = calls[h], explained.get(h)
+        verdict = call['verdict']
+        code_summary = (f"{call['rule']} 조건이 모두 맞아 {LABELS[verdict]}입니다." if verdict != 'wait'
+                        else f"{call['rule']} 조건 중 맞지 않는 것이 있어 관망입니다.")
+        risk = text['risk'] if text else '해설 모델을 실행하지 않아 규칙 밖의 위험 설명이 없습니다.'
+        if text and numbers_in(text['summary'] + ' ' + text['risk']):
+            warnings.append(f'해설 모델({label}): 문장에 검증하지 않은 숫자가 있습니다.')
+        agent = {'id': 'rule', 'name': '규칙 판정', 'role': call['rule'], 'verdict': verdict, 'summary': code_summary,
+                 'evidence': call['checks'], 'counter': risk, 'invalidation': call['exit'],
+                 'model': f'코드 · {signals.VERSION}', 'sources': sources}
+        horizons[h] = {'verdict': verdict, 'label': label, 'timeframes': frames, 'rule': call['rule'],
+                       'summary': text['summary'] if text else code_summary, 'agreement': ' · '.join(call['checks']),
+                       'disagreement': risk, 'condition': call['exit'], 'agents': [agent],
+                       'explainer': {'model': config['model']} if text else None}
     return {'schemaVersion': 1, 'id': str(uuid.uuid4()), 'exchange': 'Binance', 'market': 'USDⓈ-M perpetual',
-            'symbol': snapshot['symbol'], 'asOf': stamp, 'mode': 'analysis', 'promptVersion': PROMPT_VERSION,
-            'origin': 'local-llm', 'warnings': list(dict.fromkeys(warnings)), 'facts': facts,
-            'team': [{'role': r, 'name': ROLES[r], 'model': m} for r, m in roles.items()], 'horizons': horizons}
+            'symbol': snapshot['symbol'], 'asOf': stamp, 'mode': 'analysis', 'promptVersion': signals.VERSION,
+            'origin': 'local-llm', 'warnings': list(dict.fromkeys(warnings)), 'facts': facts, 'horizons': horizons}
