@@ -90,11 +90,6 @@ def ratio_row(at, ratio):
     return {'timestamp': at, 'longShortRatio': ratio, 'longAccount': f'{r / (1 + r):.4f}', 'shortAccount': f'{1 / (1 + r):.4f}'}
 
 
-def funding_before(collector, symbol, at, limit=market.FUNDING_COUNT):
-    return market.history_rows(collector.request('/fapi/v1/fundingRate', symbol=symbol, limit=limit, endTime=at - 1),
-                               symbol, ('fundingRate',), 'fundingTime', signed=('fundingRate',))
-
-
 def derivatives_at(symbol, at, candles, funding, folder=ARCHIVE):
     """The same history the live analysis fetches, as it stood just before `at`, given the funding settled before it.
     OI and long/short come from the archive (within about 0.3% of the REST values at 1h); taker ratios from klines, as REST computes them."""
@@ -122,17 +117,11 @@ def derivatives_at(symbol, at, candles, funding, folder=ARCHIVE):
     return {'serverTime': at, 'funding': funding, 'periods': periods, 'warnings': []}
 
 
-def snapshot_at(collector, symbol, at, folder=ARCHIVE):
+def snapshot_at(collector, symbol, at):
+    """The candles closed before `at`. The rules read nothing else; funding and positioning only fed the explainer,
+    which backtests do not run, so a gap in Binance's archive no longer skips a moment."""
     candles = {i: bars_before(collector, at, i, symbol=symbol) for i in INTERVALS}
-    derivatives = derivatives_at(symbol, at, candles, funding_before(collector, symbol, at), folder)
-    # shortcut: the live snapshot's funding rate is the running period's estimate; here it is the last settled rate.
-    return {'symbol': symbol, 'serverTime': at, 'warnings': [], 'candles': candles,
-            'ticker': {'price': candles['5m'][-1]['close']},
-            'mark': {'markPrice': bars_before(collector, at, '5m', 1, '/fapi/v1/markPriceKlines', symbol=symbol)[-1]['close'],
-                     'indexPrice': bars_before(collector, at, '5m', 1, '/fapi/v1/indexPriceKlines', pair=symbol)[-1]['close'],
-                     'lastFundingRate': derivatives['funding'][-1]['fundingRate']},
-            'openInterest': {'openInterest': metrics_at(symbol, at - INTERVALS['5m'], folder)['sum_open_interest']},
-            'derivatives': derivatives}
+    return {'symbol': symbol, 'serverTime': at, 'warnings': [], 'candles': candles, 'ticker': {'price': candles['5m'][-1]['close']}}
 
 
 def exit_bars(collector, symbol, at):
@@ -153,7 +142,7 @@ def done(path, symbol):
                                              (symbol, signals.VERSION))}
 
 
-def run(symbol, days=90, every_hours=4, limit=None, collector=None, now=None, folder=ARCHIVE, log=print):
+def run(symbol, days=90, every_hours=4, limit=None, collector=None, now=None, log=print):
     collector = collector or market.Collector()
     now = now or int(time.time() * 1000)
     seen = done(collector.db_path, symbol)
@@ -162,7 +151,7 @@ def run(symbol, days=90, every_hours=4, limit=None, collector=None, now=None, fo
     saved = 0
     for n, at in enumerate(todo, 1):
         try:
-            snapshot = snapshot_at(collector, symbol, at, folder)
+            snapshot = snapshot_at(collector, symbol, at)
             exits = exit_bars(collector, symbol, at)
             report = {**local_llm.analyze(snapshot), 'mode': 'backtest'}
             with closing(journal.connect(collector.db_path)) as db, db:

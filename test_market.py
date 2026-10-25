@@ -93,7 +93,7 @@ class MarketTests(unittest.TestCase):
         market.save_snapshot(result, self.path)
         with closing(sqlite3.connect(self.path)) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM candles').fetchone()[0], 10)
-            self.assertEqual(db.execute('SELECT count(*) FROM snapshots').fetchone()[0], 1)
+            self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE name='snapshots'").fetchone())
         self.assertEqual(result['mark']['lastFundingRate'], '-0.0001')
 
     def test_invalid_symbol_never_calls_upstream(self):

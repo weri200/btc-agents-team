@@ -74,9 +74,15 @@ def bracket_exit(db, symbol, interval, as_of, hold, entry, direction, atr, tp, s
     return float(bar['close'])
 
 
-def outcome(db, symbol, as_of, horizon, verdict, now, atr=None):
+def legacy(version):
+    """Reports from before rules-v1 (the LLM team) saved only 4h bars for the swing hold."""
+    return not version.startswith('rules-')
+
+
+def outcome(db, symbol, as_of, horizon, verdict, now, atr=None, old=False):
     """How one call came out once its hold is over: wait, missing, or hit/miss with the entry and exit prices and the signed return.
-    Horizons in BRACKETS exit at their ATR target or stop (`atr` is the 4h ATR at the call); the rest at the close when the hold ends."""
+    Horizons in BRACKETS exit at their ATR target or stop (`atr` is the 4h ATR at the call); the rest at the close when the hold ends.
+    `old` reports (see legacy) fall back to 4h bars; newer ones are missing without their 1h bars, so one rule is always scored one way."""
     interval, hold = HOLDS[horizon]
     if as_of + hold > now:
         return {'status': 'pending'}
@@ -88,8 +94,7 @@ def outcome(db, symbol, as_of, horizon, verdict, now, atr=None):
         exit_ = None
     elif horizon in BRACKETS:
         args = (as_of, hold, entry, direction, atr, *BRACKETS[horizon])
-        # Backtests saved before rules-v1 kept only the 4h bars of the hold.
-        exit_ = bracket_exit(db, symbol, interval, *args) or bracket_exit(db, symbol, '4h', *args)
+        exit_ = bracket_exit(db, symbol, interval, *args) or (bracket_exit(db, symbol, '4h', *args) if old else None)
     else:
         exit_ = close_at(db, symbol, interval, as_of + hold)
     if exit_ is None:
@@ -141,7 +146,7 @@ def scores(path=DB, now=None):
         query = f'SELECT r.symbol, r.as_of, r.mode, r.prompt_version, v.horizon, v.role, v.verdict, {ATR_SQL} FROM verdicts v JOIN reports r ON r.id = v.report_id'
         for symbol, as_of, mode, version, horizon, role, verdict, atr in db.execute(query).fetchall():
             key = {'mode': mode, 'promptVersion': version, 'horizon': horizon, 'role': role}
-            tally(groups, key, verdict, outcome(db, symbol, as_of, horizon, verdict, now, atr))
+            tally(groups, key, verdict, outcome(db, symbol, as_of, horizon, verdict, now, atr, legacy(version)))
     return sorted(summarize(groups), key=lambda g: (g['mode'], g['promptVersion'], g['horizon'], g['role'] != 'judge', g['role']))
 
 
@@ -159,7 +164,7 @@ def backtests(path=DB, now=None, limit=100):
         for rid, symbol, as_of, version, scale, horizon, verdict, atr in rows:
             entry = reports.setdefault(rid, {'id': rid, 'symbol': symbol, 'asOf': as_of, 'promptVersion': version,
                                              'priceScale': scale, 'horizons': {}})
-            entry['horizons'][horizon] = {'verdict': verdict, **outcome(db, symbol, as_of, horizon, verdict, now, atr)}
+            entry['horizons'][horizon] = {'verdict': verdict, **outcome(db, symbol, as_of, horizon, verdict, now, atr, legacy(version))}
     return {'total': total, 'reports': list(reports.values())}
 
 
@@ -176,5 +181,5 @@ def backtest_report(report_id, path=DB, now=None):
         atr = report.get('facts', {}).get('4h.atr14')
         atr = atr / (report.get('priceScale') or 1) if atr else None
         for horizon, data in report['horizons'].items():
-            data['outcome'] = outcome(db, symbol, as_of, horizon, data['verdict'], now, atr)
+            data['outcome'] = outcome(db, symbol, as_of, horizon, data['verdict'], now, atr, legacy(report['promptVersion']))
     return report
