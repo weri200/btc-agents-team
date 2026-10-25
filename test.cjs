@@ -7,6 +7,7 @@ for(const mutate of [r=>r.schemaVersion=2,r=>r.asOf='2026-10-22',r=>r.horizons.s
 const r=clone();r.mode='analysis';r.horizons.swing.agents[0].sources[0].url='https://example.com/evidence';assert.equal(validate(r).mode,'analysis');
 // Reports from before rules-v2 also carry an intraday call; it is still checked when present.
 const plain=clone();delete plain.horizons.swing.review;assert.equal(validate(plain).id,plain.id);  // the review is optional
+const bare=clone();bare.horizons.swing.review.checks[1].news[0]={...bare.horizons.swing.review.checks[1].news[0],publisher:'',url:null};assert.equal(validate(bare).id,bare.id);  // OpenBB headlines may lack both
 const older=clone();older.horizons.intraday=clone().horizons.swing;assert.equal(validate(older).id,older.id);older.horizons.intraday.verdict='BUY';assert.throws(()=>validate(older));
 console.log('Passed: demo, vote counts, analysis report, and 12 invalid-input cases.');
 const vm=require('node:vm');

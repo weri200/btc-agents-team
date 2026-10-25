@@ -163,6 +163,19 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(len(report['horizons']['swing']['agents'][0]['sources']), 1)
         self.assertEqual(len(report['horizons']['swing']['review']['sources']), 17)  # OpenBB, 15 RSS and 1 OpenBB headline; the page takes up to 40
 
+    def test_openbb_headlines_without_publisher_or_link_are_kept_and_untitled_ones_dropped(self):
+        self.snapshot['macro'] = {**MACRO, 'news': [{**MACRO['news'][0], 'publisher': '', 'url': None},
+                                                    {**MACRO['news'][0], 'title': ''}]}
+        fake = FakeLMStudio()
+        report = self.analyze(fake)
+        self.assertEqual(len(json.loads(fake.calls[0]['messages'][1]['content'])['news']), 1)
+        review = report['horizons']['swing']['review']
+        self.assertEqual(review['checks'][0]['news'], [{'publisher': '', 'title': 'Bitcoin ETF inflows', 'url': None, 'time': '2026-05-27T00:00:00+00:00'}])
+        self.assertEqual(review['sources'][1]['title'], 'Bitcoin ETF inflows')  # no leading separator
+
+    def test_the_explainer_gets_the_frames_the_rule_reads(self):
+        self.assertEqual(set(llm.HORIZONS['swing'][2]), set(signals.FRAMES['swing']))
+
     def test_a_made_up_news_id_drops_the_explanation(self):
         self.snapshot['news'] = {'items': [RSS], 'warnings': []}
         report = self.analyze(FakeLMStudio(cite=['news-9']))
