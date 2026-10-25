@@ -340,6 +340,9 @@ body.sidebar-collapsed main { margin-left:0; }
 .agent .review-list p { margin:0; min-height:0; flex:none; }
 .review-news { font-size:12px; line-height:1.8; margin-top:6px; overflow-wrap:anywhere; }
 @media(max-width:600px) { .review-list { grid-template-columns:1fr; } }
+.review-sources { margin-top:16px; border-top:1px solid var(--line); padding-top:12px; font-size:12px; }
+.review-sources summary { cursor:pointer; color:var(--muted); }
+.review-sources ul { margin:8px 0 0; padding-left:20px; line-height:1.8; color:var(--copy); overflow-wrap:anywhere; }
 /* With the team synthesis moved into the judge card, the checklist spans the width with its items side by side. */
 @media(min-width:801px) { .checks { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--gap); } .checks li { margin-top:0; } }
 .chart-studies { position:relative; }

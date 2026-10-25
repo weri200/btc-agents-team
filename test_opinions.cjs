@@ -38,7 +38,9 @@ vm.runInContext('report=analyzed',context);
  // The AI review sits between the final call and the rule card, with its caution, tags and only http(s) links.
  const review=html.slice(html.indexOf('<article class="agent judge-card review-card">'),html.indexOf('<article class="agent judge-card rule-card">'));
  assert.match(review,/<span class="tag wait">주의 보통<\/span>/);assert.match(review,/<h3>AI 정성 점검<\/h3>/);
- assert.equal((review.match(/<li>/g)||[]).length,2);assert.match(review,/<span class="tag short">하락 요인<\/span>/);
+ assert.equal((review.split('<details')[0].match(/<li>/g)||[]).length,2);
+ // What the AI read is listed under its review, folded; the rule card keeps only its own data.
+ assert.match(review,/<summary>AI가 읽은 자료 2개<\/summary>/);assert.match(review,/데모 · 가상 거시 지표/);assert.match(review,/<span class="tag short">하락 요인<\/span>/);
  assert.match(review,/href="https:\/\/example.com\/demo"/);
  assert.match(node('#horizons').innerHTML,/AI 주의 보통/);
  assert(html.startsWith('<article class="agent judge-card">'));
