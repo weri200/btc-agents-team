@@ -17,7 +17,8 @@ BASE = 'http://127.0.0.1:1234/v1'
 CONFIG = Path(__file__).resolve().parent / 'models.json'
 ROLES = {'explainer': '해설 모델'}
 # The 'swing' key stays so scores line up with reports saved before the intraday call was dropped.
-HORIZONS = {'swing': ('4시간 추세 돌파', '1일 추세 · 4시간 돌파', ('4h', '1d'))}
+# The explainer gets the facts of the frames the rule reads, so the two cannot drift apart.
+HORIZONS = {'swing': ('4시간 추세 돌파', '1일 추세 · 4시간 돌파', signals.FRAMES['swing'])}
 RETRY_DELAY = 5
 TIMINGS = Path(__file__).resolve().parent / 'data' / 'llm_timings.json'
 DEFAULT_EXPECTED_MS = 60000
@@ -304,7 +305,7 @@ def analyze(snapshot, config=None):
     warnings += feed.get('warnings', [])
     # Coin news from RSS (with minutes) first, then OpenBB's date-only headlines; ids are what the model may cite.
     news = {f'news-{i}': n for i, n in enumerate(
-        [*feed.get('items', []), *({**n, 'time': n['date']} for n in macro.get('news', []))], 1)}
+        [n for n in [*feed.get('items', []), *({**n, 'time': n['date']} for n in macro.get('news', []))] if n['title']], 1)}
     calls = {h: {'verdict': signals.decide(facts, h), 'rule': signals.NAMES[h], 'checks': signals.checks(facts, h)} for h in HORIZONS}
     for h, call in calls.items():
         call['exit'] = signals.exit_plan(facts, h, call['verdict'])
@@ -337,7 +338,7 @@ def analyze(snapshot, config=None):
     def when(n):
         return n['time'] + ('T00:00:00+00:00' if len(n['time']) == 10 else '')
     read = ([{'title': macro_sources_title(macro), 'url': None, 'asOf': stamp}] if macro.get('facts') else []) + \
-        [{'title': f"{n['publisher']} · {n['title']}"[:200], 'url': n['url'], 'asOf': when(n)} for n in news.values()]
+        [{'title': ' · '.join(filter(None, (n['publisher'], n['title'])))[:200], 'url': n['url'], 'asOf': when(n)} for n in news.values()]
     horizons = {}
     for h, (label, frames, _) in HORIZONS.items():
         call, text = calls[h], explained.get(h)

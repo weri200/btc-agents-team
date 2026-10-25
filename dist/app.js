@@ -44,7 +44,8 @@ function render(){
 // The explainer's review of what the rule does not read: schedules, news and sentiment. Advisory only; the call stays the code's.
 const CAUTION={'낮음':'long','보통':'wait','높음':'short'},EFFECT={'상승 요인':'long','하락 요인':'short','변동성 확대':'wait'};
 function reviewCard(r){
- const link=n=>/^https?:\/\//.test(n.url)?`<a class="source-link" href="${esc(n.url)}" target="_blank" rel="noopener noreferrer">${esc(n.publisher)} · ${esc(n.title)} ↗</a>`:`${esc(n.publisher)} · ${esc(n.title)}`;
+ const name=n=>[n.publisher,n.title].filter(Boolean).map(esc).join(' · ');  // OpenBB headlines may have no publisher
+ const link=n=>/^https?:\/\//.test(n.url||'')?`<a class="source-link" href="${esc(n.url)}" target="_blank" rel="noopener noreferrer">${name(n)} ↗</a>`:name(n);
  return `<article class="agent judge-card review-card"><div class="agent-head"><span class="agent-icon">◎</span><span class="tag ${CAUTION[r.caution]||'neutral'}">주의 ${esc(r.caution)}</span></div><h3>AI 정성 점검</h3><div class="role">일정 · 뉴스 · 시장 분위기 · 참고용이며 판정은 바꾸지 않습니다</div><ul class="review-list">${r.checks.map(c=>`<li><div class="review-tags"><span class="tag neutral">${esc(c.category)}</span><span class="tag ${EFFECT[c.effect]||'neutral'}">${esc(c.effect)}</span></div><p>${esc(c.finding)}</p>${c.news.length?`<div class="review-news">${c.news.map(n=>`${link(n)} <span class="muted">· ${esc(time(n.time))}</span>`).join('<br>')}</div>`:''}</li>`).join('')}</ul>${r.sources&&r.sources.length?`<details class="review-sources"><summary>AI가 읽은 자료 ${r.sources.length}개</summary><ul>${r.sources.map(s=>`<li>${s.url?`<a class="source-link" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)} ↗</a>`:esc(s.title)} <span class="muted">· ${esc(time(s.asOf))}</span></li>`).join('')}</ul></details>`:''}</article>`;
 }
 // The code's rule in full: every condition with its value, the exit and its prices, the risks outside the rule and the data used.

@@ -32,7 +32,7 @@
         const v=h.review;if(typeof v!=='object'||!['낮음','보통','높음'].includes(v.caution)||!Array.isArray(v.checks)||v.checks.length<1||v.checks.length>12)fail('AI 점검 형식을 확인하세요.');
         for(const c of v.checks){if(!c||typeof c!=='object')fail('AI 점검 항목 형식 오류');['category','finding','effect'].forEach(k=>str(c[k],k));
           if(!Array.isArray(c.news)||c.news.length>12)fail('AI 점검 기사 형식 오류');
-          for(const n of c.news){if(!n||typeof n!=='object')fail('AI 점검 기사 형식 오류');str(n.title,'기사 제목');str(n.publisher,'기사 출처',200);date(n.time);if(typeof n.url!=='string'||!/^https?:\/\//.test(n.url))fail('기사 URL은 http 또는 https 주소여야 합니다.')}}
+          for(const n of c.news){if(!n||typeof n!=='object')fail('AI 점검 기사 형식 오류');str(n.title,'기사 제목');if(typeof n.publisher!=='string'||n.publisher.length>200)fail('기사 출처 형식 오류');date(n.time);if(n.url!==null&&(typeof n.url!=='string'||!/^https?:\/\//.test(n.url)))fail('기사 URL은 http 또는 https 주소이거나 없어야 합니다.')}}
         // What the explainer read; reports before this list carried it in the rule card's sources instead.
         if(v.sources!=null){if(!Array.isArray(v.sources)||v.sources.length>40)fail('AI가 읽은 자료 형식 오류');for(const s of v.sources)source(s)}
       }
