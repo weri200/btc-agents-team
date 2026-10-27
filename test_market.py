@@ -274,6 +274,17 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(self.post()[0], 200)
         with patch.object(server.collector, 'collect', side_effect=market.MarketError('offline')):
             self.assertEqual(self.post()[0], 502)
+        # Positioning history only feeds the explainer, so losing it still gives the calls, with a warning.
+        with patch.object(server.local_llm, 'load_config', return_value={'model': 'm', 'temperature': 0.1}), \
+                patch.object(server.collector, 'collect', return_value={'serverTime': NOW, 'warnings': []}), \
+                patch.object(server.collector, 'derivatives', side_effect=market.MarketError('limit')), \
+                patch.object(server.macro, 'collect', return_value={}), patch.object(server.news, 'collect', return_value={'items': [], 'warnings': []}), \
+                patch.object(server.local_llm, 'analyze', return_value={'id': 'test', 'warnings': []}) as analyze, \
+                patch.object(server.journal, 'save_report'):
+            self.assertEqual(self.post()[0], 200)
+        snapshot = analyze.call_args.args[0]
+        self.assertNotIn('derivatives', snapshot)
+        self.assertIn('수급 이력: limit', snapshot['warnings'][0])
         # A bad models.json still gives the code's calls, without the explanation.
         with patch.object(server.local_llm, 'load_config', side_effect=server.local_llm.AnalysisError('models.json 오류.')),                 patch.object(server.collector, 'collect', return_value={'serverTime': NOW}),                 patch.object(server.collector, 'derivatives', return_value={}),                 patch.object(server.macro, 'collect', return_value={}), patch.object(server.news, 'collect', return_value={'items': [], 'warnings': []}) as news_feed,                 patch.object(server.local_llm, 'analyze', return_value={'id': 'test', 'warnings': []}) as analyze,                 patch.object(server.journal, 'save_report'):
             status, body = self.post()
