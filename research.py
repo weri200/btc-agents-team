@@ -366,16 +366,19 @@ if (last) chart.timeScale().setVisibleRange({ from: last.entry - 30 * 86400, to:
 VOL_DAYS = 20  # realized volatility window for --vol-target
 
 
-def hold_until_flip(bars, funding, lookback, fee, vol_target=None, cap=2.0):
+def hold_until_flip(bars, funding, lookback, fee, vol_target=None, cap=2.0, start=0):
     """Time-series momentum on daily closes, held until the signal flips: at each close the position is +1 when the close is
     above the close `lookback` days earlier, -1 when below (or that sign times vol_target / realized volatility, at most
     `cap`, when vol_target is set). Each day earns position x the next day's change, less `fee` per unit of position
     changed and the funding the position paid while open (longs pay positive rates). lookback None stays long throughout.
+    Days opening before `start` (ms) only warm up the signal: nothing is held, so the entry fee falls on the first counted day.
     Returns {'days': [(day open time, net return)], 'fees', 'funding'} with fees and funding as summed fractions."""
     closes = [float(b['close']) for b in bars]
     times = [r['time'] for r in funding]
     days, position, fees, paid = [], 0.0, 0.0, 0.0
     for i in range(max(lookback or 0, VOL_DAYS), len(bars) - 1):
+        if int(bars[i + 1]['openTime']) < start:
+            continue
         size = 1.0 if lookback is None else side(closes[i] / closes[i - lookback] - 1)
         if vol_target and size:
             changes = [closes[k] / closes[k - 1] - 1 for k in range(i - VOL_DAYS + 1, i + 1)]
@@ -416,9 +419,8 @@ def tsmom(symbol, since, lookbacks, fee_pct, vol_target=None, collector=None, no
     results = {}
     # The benchmark (None): a long held throughout, paying funding, with one entry fee.
     for lookback in [*lookbacks, None]:
-        run = hold_until_flip(bars, funding, lookback, fee, vol_target if lookback else None)
-        days = [d for d in run['days'] if d[0] >= since]
-        results[f'{lookback}일' if lookback else '계속 롱'] = {**compound(days), 'fees': run['fees'] * 100, 'funding': run['funding'] * 100}
+        run = hold_until_flip(bars, funding, lookback, fee, vol_target if lookback else None, start=since)
+        results[f'{lookback}일' if lookback else '계속 롱'] = {**compound(run['days']), 'fees': run['fees'] * 100, 'funding': run['funding'] * 100}
     return results
 
 

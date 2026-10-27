@@ -208,6 +208,15 @@ class MomentumTest(unittest.TestCase):
         flat = research.hold_until_flip(days([90] * 11 + [100] * 30 + [110]), [], 30, 0, vol_target=0.2)
         self.assertAlmostEqual(flat['days'][-1][1], 2.0 * 0.10)
 
+    def test_days_before_start_cost_nothing(self):
+        bars = days(self.CLOSES)
+        # Start on the third held day: the short is entered there (one unit of fee) and only its funding counts.
+        run = research.hold_until_flip(bars, self.funding(bars), 2, 0.0005, start=int(bars[23]['openTime']))
+        self.assertEqual(len(run['days']), 1)
+        self.assertAlmostEqual(run['days'][0][1], 0.10 - 0.0005 + 0.001)
+        self.assertAlmostEqual(run['fees'], 0.0005)
+        self.assertAlmostEqual(run['funding'], -0.001)
+
     def test_compound_by_year(self):
         new_year = 1767225600000  # 2026-01-01T00:00Z
         result = research.compound([(new_year - D, 0.10), (new_year, -0.5), (new_year + D, 0.10)])

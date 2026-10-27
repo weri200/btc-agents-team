@@ -111,7 +111,12 @@ class Handler(SimpleHTTPRequestHandler):
                 # The calls never need the model, so a bad models.json only drops the explanation.
                 config, problem = None, str(exc)
             local_llm.progress.begin(payload['symbol'], {'explainer': config['model']} if config else {})
-            snapshot = {**collector.collect(payload['symbol']), 'derivatives': collector.derivatives(payload['symbol'])}
+            snapshot = collector.collect(payload['symbol'])
+            try:
+                snapshot = {**snapshot, 'derivatives': collector.derivatives(payload['symbol'])}
+            except MarketError as exc:
+                # The rule reads candles only; positioning history only feeds the explainer, so its loss is a warning.
+                snapshot = {**snapshot, 'warnings': [*snapshot.get('warnings', []), f'수급 이력: {exc} 해설은 수급 이력 없이 씁니다.']}
             try:
                 snapshot['macro'] = macro.collect(payload['symbol'], snapshot['serverTime'])
             except macro.MacroUnavailable as exc:
