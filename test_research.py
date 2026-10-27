@@ -228,10 +228,13 @@ class MomentumTest(unittest.TestCase):
     def test_tsmom_runs_on_exchange_history(self):
         collector = market.Collector(Path(tempfile.mkdtemp()) / 'm.sqlite3')
         with patch.object(collector, 'request', side_effect=fake_request):
-            results = research.tsmom('BTCUSDT', NOW - 30 * D, [5, 10], 0.1, collector=collector, now=NOW, log=lambda line: None)
-        self.assertEqual(list(results), ['5일', '10일', '계속 롱'])
+            # A 30-day lookback warms up longer than the 20-day volatility window, so the 5-day run starts before `since`.
+            results = research.tsmom('BTCUSDT', NOW - 30 * D, [5, 30], 0.1, collector=collector, now=NOW, log=lambda line: None)
+        self.assertEqual(list(results), ['5일', '30일', '계속 롱'])
         self.assertGreater(results['5일']['returnPct'], 0)  # prices only climb in the fake, so momentum stays long
         self.assertGreater(results['계속 롱']['funding'], 0)  # positive rates: the long paid
+        # All three hold long over the same counted days, so warm-up funding would set them apart.
+        self.assertEqual(len({round(r['funding'], 9) for r in results.values()}), 1)
 
 if __name__ == '__main__':
     unittest.main()
